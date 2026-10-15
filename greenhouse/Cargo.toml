@@ -1,0 +1,14 @@
+# Development workspace for building and testing the Body Double app outside
+# jacepero/greenhouse. Only body-double-app/ is copied into Greenhouse; there it
+# joins the root workspace and kernel/ is the real kernel crate. Here, kernel/ is
+# a stand-in for the slice of the kernel crate that apps use as their SDK
+# (README.md, "Building here").
+[workspace]
+resolver = "2"
+members = [
+    "kernel",
+    "body-double-app",
+]
+
+[profile.release]
+lto = true

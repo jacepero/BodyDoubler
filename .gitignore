@@ -10,3 +10,9 @@ DerivedData/
 
 # Model weights are downloaded at runtime, never committed
 *.gguf
+
+# Rust build output (greenhouse/ dev workspace)
+target/
+
+# Node
+node_modules/
