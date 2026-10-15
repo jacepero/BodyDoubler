@@ -23,11 +23,7 @@ async fn main() {
     println!(
         "[body-double] default zone {}; notices for {}",
         cfg.timezone,
-        if cfg.notices_for.is_empty() {
-            "nobody".to_string()
-        } else {
-            cfg.notices_for.join(", ")
-        }
+        cfg.notices_for.as_deref().unwrap_or("nobody")
     );
     let (router, app) = match build_app(cfg) {
         Ok(built) => built,

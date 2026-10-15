@@ -1,6 +1,6 @@
-// Configuration: the household's default time zone, whose check-ins may raise
-// Greenhouse notices, and the defaults for a new check-in plan. A root-owned
-// file.
+// Configuration: the household's default time zone, the one person whose
+// check-ins also raise a Greenhouse notice, and the defaults for a new check-in
+// plan. A root-owned file.
 
 use crate::time;
 use greenhouse_kernel::clock::{self, Zone};
@@ -52,7 +52,7 @@ struct FileConfig {
     version: String,
     timezone: String,
     #[serde(default)]
-    notices_for: Vec<String>,
+    notices_for: Option<serde_json::Value>,
     #[serde(default)]
     checkins: Option<FileCheckins>,
 }
@@ -61,7 +61,7 @@ struct FileConfig {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub timezone: String,
-    pub notices_for: Vec<String>,
+    pub notices_for: Option<String>,
     pub defaults: PlanDefaults,
 }
 
@@ -74,10 +74,10 @@ pub struct AppConfig {
     pub service_token: String,
     /// The zone of anyone who has not chosen their own.
     pub timezone: String,
-    /// The people whose check-ins also raise a Greenhouse notice. Notices are
-    /// the household's alerts, read by the owner, so this is meant for the
-    /// owner.
-    pub notices_for: Vec<String>,
+    /// The one person whose check-ins also raise a Greenhouse notice: the
+    /// owner. Notices are household-wide and only the owner reads them, so
+    /// anyone else's would land in the owner's feed.
+    pub notices_for: Option<String>,
     pub defaults: PlanDefaults,
 }
 
@@ -90,11 +90,22 @@ pub fn parse_file_config(text: &str) -> Result<Settings, String> {
     if !clock::valid_zone_name(&file.timezone) {
         return Err("timezone must be an IANA time zone name".into());
     }
-    for user in &file.notices_for {
-        if user.trim().is_empty() || user.len() > 200 {
-            return Err("notices_for holds user names".into());
+    // One name, by construction: a list would let someone else's check-ins
+    // into the owner's notices.
+    let notices_for = match file.notices_for {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(user))
+            if !user.trim().is_empty() && user.trim() == user && user.len() <= 200 =>
+        {
+            Some(user)
         }
-    }
+        Some(_) => {
+            return Err(
+                "notices_for is the owner's user id, one name: Greenhouse notices are household-wide and only the owner reads them"
+                    .into(),
+            )
+        }
+    };
     let mut defaults = PlanDefaults::default();
     if let Some(c) = file.checkins {
         if let Some(on) = c.on {
@@ -124,7 +135,7 @@ pub fn parse_file_config(text: &str) -> Result<Settings, String> {
     }
     Ok(Settings {
         timezone: file.timezone,
-        notices_for: file.notices_for,
+        notices_for,
         defaults,
     })
 }
@@ -152,6 +163,11 @@ fn registration_credential() -> String {
 }
 
 impl AppConfig {
+    /// Whether this person's check-ins raise a Greenhouse notice.
+    pub fn notices(&self, user: &str) -> bool {
+        self.notices_for.as_deref() == Some(user)
+    }
+
     pub fn from_env() -> Result<Self, String> {
         let path = ev("GREENHOUSE_BODY_DOUBLE_CONFIG", DEFAULT_CONFIG_FILE);
         let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
@@ -179,7 +195,7 @@ mod tests {
     const EXAMPLE: &str = r#"{
       "version": "greenhouse-body-double-config-v1",
       "timezone": "America/New_York",
-      "notices_for": ["owner"],
+      "notices_for": "owner",
       "checkins": {"on": true, "every_minutes": 45, "quiet_from": "22:00", "quiet_until": "08:00"}
     }"#;
 
@@ -187,7 +203,7 @@ mod tests {
     fn the_example_configuration_is_read() {
         let s = parse_file_config(EXAMPLE).unwrap();
         assert_eq!(s.timezone, "America/New_York");
-        assert_eq!(s.notices_for, vec!["owner"]);
+        assert_eq!(s.notices_for.as_deref(), Some("owner"));
         assert_eq!(s.defaults, PlanDefaults::default());
     }
 
@@ -196,7 +212,7 @@ mod tests {
         let s =
             parse_file_config(r#"{"version":"greenhouse-body-double-config-v1","timezone":"UTC"}"#)
                 .unwrap();
-        assert!(s.notices_for.is_empty());
+        assert_eq!(s.notices_for, None);
         assert_eq!(s.defaults, PlanDefaults::default());
     }
 
@@ -218,7 +234,12 @@ mod tests {
                 EXAMPLE.replace("\"notices_for\"", "\"extra\": 1, \"notices_for\""),
                 "unknown field",
             ),
-            (EXAMPLE.replace("[\"owner\"]", "[\" \"]"), "blank user"),
+            (EXAMPLE.replace("\"owner\"", "\" \""), "blank user"),
+            (
+                EXAMPLE.replace("\"owner\"", "[\"owner\", \"guest\"]"),
+                "more than the owner",
+            ),
+            (EXAMPLE.replace("\"owner\"", "[\"owner\"]"), "a list"),
         ] {
             assert!(parse_file_config(&bad).is_err(), "{why}");
         }

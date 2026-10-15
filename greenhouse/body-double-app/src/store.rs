@@ -2,6 +2,10 @@
 // person (the user in the kernel's identity token) and every query names that
 // person, so one person's ids never reach another's data.
 //
+// The ids people and the model see are each person's own numbers (`seq`:
+// 1, 2, 3 per person and table), not the shared row ids, which would let one
+// person count another's writes. Row ids stay inside this file.
+//
 // The model is stateless and so is the assistant's view of this app: all
 // memory is here, and each tool call reads what it needs.
 
@@ -13,8 +17,9 @@ pub const SCHEMA_VERSION: i64 = 1;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE entries (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
   at INTEGER NOT NULL,
   text TEXT NOT NULL,
   summary TEXT,
@@ -22,10 +27,12 @@ CREATE TABLE entries (
   task_id INTEGER
 );
 CREATE INDEX entries_user_at ON entries(user_id, at);
+CREATE UNIQUE INDEX entries_user_seq ON entries(user_id, seq);
 
 CREATE TABLE tasks (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
   title TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('active','paused','done','dropped')),
   created_at INTEGER NOT NULL,
@@ -34,15 +41,18 @@ CREATE TABLE tasks (
 );
 CREATE UNIQUE INDEX tasks_one_active ON tasks(user_id) WHERE status = 'active';
 CREATE INDEX tasks_user_updated ON tasks(user_id, updated_at);
+CREATE UNIQUE INDEX tasks_user_seq ON tasks(user_id, seq);
 
 CREATE TABLE threads (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
   note TEXT NOT NULL,
   opened_at INTEGER NOT NULL,
   closed_at INTEGER
 );
 CREATE INDEX threads_user ON threads(user_id, closed_at);
+CREATE UNIQUE INDEX threads_user_seq ON threads(user_id, seq);
 
 CREATE TABLE checkins (
   id INTEGER PRIMARY KEY,
@@ -97,11 +107,13 @@ impl Status {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
+    /// The person's own number for it.
     pub id: i64,
     pub at: i64,
     pub text: String,
     pub summary: Option<String>,
     pub mood: Option<String>,
+    /// The task's number (the person's own).
     pub task_id: Option<i64>,
     /// The task's title, joined for display.
     pub task: Option<String>,
@@ -109,7 +121,10 @@ pub struct Entry {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Task {
+    /// The person's own number for it.
     pub id: i64,
+    /// The row id, never shown.
+    key: i64,
     pub title: String,
     pub status: String,
     pub created_at: i64,
@@ -119,7 +134,10 @@ pub struct Task {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Thread {
+    /// The person's own number for it.
     pub id: i64,
+    /// The row id, never shown.
+    key: i64,
     pub note: String,
     pub opened_at: i64,
     pub closed_at: Option<i64>,
@@ -170,9 +188,17 @@ pub struct Store {
     conn: Connection,
 }
 
-const ENTRY_COLUMNS: &str =
-    "e.id, e.at, e.text, e.summary, e.mood, e.task_id, (SELECT title FROM tasks t WHERE t.id = e.task_id)";
-const TASK_COLUMNS: &str = "id, title, status, created_at, updated_at, active_since";
+/// An entry and its task, which is always the same person's.
+const ENTRY_FROM: &str =
+    "entries e LEFT JOIN tasks t ON t.id = e.task_id AND t.user_id = e.user_id";
+const ENTRY_COLUMNS: &str = "e.seq, e.at, e.text, e.summary, e.mood, t.seq, t.title";
+const TASK_COLUMNS: &str = "seq, title, status, created_at, updated_at, active_since, id";
+const THREAD_COLUMNS: &str = "seq, note, opened_at, closed_at, id";
+
+/// The person's next number in a table (inside the insert, so it is atomic).
+fn next_seq(table: &str) -> String {
+    format!("(SELECT COALESCE(MAX(seq), 0) + 1 FROM {table} WHERE user_id = ?1)")
+}
 
 fn entry_row(r: &Row) -> rusqlite::Result<Entry> {
     Ok(Entry {
@@ -194,6 +220,7 @@ fn task_row(r: &Row) -> rusqlite::Result<Task> {
         created_at: r.get(3)?,
         updated_at: r.get(4)?,
         active_since: r.get(5)?,
+        key: r.get(6)?,
     })
 }
 
@@ -203,6 +230,7 @@ fn thread_row(r: &Row) -> rusqlite::Result<Thread> {
         note: r.get(1)?,
         opened_at: r.get(2)?,
         closed_at: r.get(3)?,
+        key: r.get(4)?,
     })
 }
 
@@ -241,7 +269,7 @@ fn pause_active(tx: &Transaction, user: &str, now: i64) -> rusqlite::Result<Opti
     let ran = now - task.active_since.unwrap_or(task.updated_at);
     tx.execute(
         "UPDATE tasks SET status = 'paused', active_since = NULL, updated_at = ?1 WHERE id = ?2",
-        params![now, task.id],
+        params![now, task.key],
     )?;
     task.status = "paused".into();
     task.active_since = None;
@@ -249,10 +277,10 @@ fn pause_active(tx: &Transaction, user: &str, now: i64) -> rusqlite::Result<Opti
     Ok(Some((task, ran.max(0))))
 }
 
-fn activate(tx: &Transaction, task_id: i64, now: i64) -> rusqlite::Result<()> {
+fn activate(tx: &Transaction, key: i64, now: i64) -> rusqlite::Result<()> {
     tx.execute(
         "UPDATE tasks SET status = 'active', active_since = ?1, updated_at = ?1 WHERE id = ?2",
-        params![now, task_id],
+        params![now, key],
     )?;
     Ok(())
 }
@@ -262,13 +290,44 @@ fn same_title(a: &str, b: &str) -> bool {
     a.trim().to_lowercase() == b.trim().to_lowercase()
 }
 
+/// A task by the person's number for it.
 fn task_in(conn: &Connection, user: &str, id: i64) -> rusqlite::Result<Option<Task>> {
     conn.query_row(
-        &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE user_id = ?1 AND id = ?2"),
+        &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE user_id = ?1 AND seq = ?2"),
         params![user, id],
         task_row,
     )
     .optional()
+}
+
+fn task_by_key(conn: &Connection, key: i64) -> rusqlite::Result<Task> {
+    conn.query_row(
+        &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1"),
+        params![key],
+        task_row,
+    )
+}
+
+fn save_plan_in(conn: &Connection, plan: &Plan) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO plans (user_id, enabled, every_minutes, quiet_from, quiet_until, timezone, next_due_at, oneoff_at, unanswered)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled, every_minutes = excluded.every_minutes,
+           quiet_from = excluded.quiet_from, quiet_until = excluded.quiet_until, timezone = excluded.timezone,
+           next_due_at = excluded.next_due_at, oneoff_at = excluded.oneoff_at, unanswered = excluded.unanswered",
+        params![
+            plan.user_id,
+            plan.enabled as i64,
+            plan.every_minutes,
+            plan.quiet.map(|q| q.0 as i64),
+            plan.quiet.map(|q| q.1 as i64),
+            plan.timezone,
+            plan.next_due_at,
+            plan.oneoff_at,
+            plan.unanswered
+        ],
+    )?;
+    Ok(())
 }
 
 impl Store {
@@ -316,15 +375,19 @@ impl Store {
         summary: Option<&str>,
         mood: Option<&str>,
     ) -> StoreResult<Entry> {
-        let task_id = active_in(&self.conn, user)?.map(|t| t.id);
+        let task_key = active_in(&self.conn, user)?.map(|t| t.key);
         self.conn.execute(
-            "INSERT INTO entries (user_id, at, text, summary, mood, task_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![user, at, text, summary, mood, task_id],
+            &format!(
+                "INSERT INTO entries (user_id, seq, at, text, summary, mood, task_id)
+                 VALUES (?1, {}, ?2, ?3, ?4, ?5, ?6)",
+                next_seq("entries")
+            ),
+            params![user, at, text, summary, mood, task_key],
         )?;
-        let id = self.conn.last_insert_rowid();
+        let key = self.conn.last_insert_rowid();
         Ok(self.conn.query_row(
-            &format!("SELECT {ENTRY_COLUMNS} FROM entries e WHERE e.id = ?1"),
-            params![id],
+            &format!("SELECT {ENTRY_COLUMNS} FROM {ENTRY_FROM} WHERE e.id = ?1"),
+            params![key],
             entry_row,
         )?)
     }
@@ -340,7 +403,7 @@ impl Store {
     /// The last `n` entries, oldest first.
     pub fn recent_entries(&self, user: &str, n: usize) -> StoreResult<Vec<Entry>> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {ENTRY_COLUMNS} FROM entries e WHERE e.user_id = ?1 ORDER BY e.at DESC, e.id DESC LIMIT ?2"
+            "SELECT {ENTRY_COLUMNS} FROM {ENTRY_FROM} WHERE e.user_id = ?1 ORDER BY e.at DESC, e.id DESC LIMIT ?2"
         ))?;
         let mut rows = stmt
             .query_map(params![user, n as i64], entry_row)?
@@ -358,7 +421,7 @@ impl Store {
         limit: usize,
     ) -> StoreResult<Vec<Entry>> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {ENTRY_COLUMNS} FROM entries e WHERE e.user_id = ?1 AND e.at >= ?2 AND e.at < ?3
+            "SELECT {ENTRY_COLUMNS} FROM {ENTRY_FROM} WHERE e.user_id = ?1 AND e.at >= ?2 AND e.at < ?3
              ORDER BY e.at, e.id LIMIT ?4"
         ))?;
         let rows = stmt
@@ -376,7 +439,7 @@ impl Store {
         limit: usize,
     ) -> StoreResult<Vec<Entry>> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {ENTRY_COLUMNS} FROM entries e WHERE e.user_id = ?1 AND e.at >= ?2 AND e.at < ?3
+            "SELECT {ENTRY_COLUMNS} FROM {ENTRY_FROM} WHERE e.user_id = ?1 AND e.at >= ?2 AND e.at < ?3
              ORDER BY e.at DESC, e.id DESC LIMIT ?4"
         ))?;
         let mut rows = stmt
@@ -408,7 +471,7 @@ impl Store {
     pub fn paused_tasks(&self, user: &str, n: usize) -> StoreResult<Vec<Task>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {TASK_COLUMNS} FROM tasks WHERE user_id = ?1 AND status = 'paused'
-             ORDER BY updated_at DESC, id DESC LIMIT ?2"
+             ORDER BY updated_at DESC, seq DESC LIMIT ?2"
         ))?;
         let rows = stmt
             .query_map(params![user, n as i64], task_row)?
@@ -423,7 +486,7 @@ impl Store {
             "SELECT {TASK_COLUMNS} FROM tasks WHERE user_id = ?1 AND (
                (created_at >= ?2 AND created_at < ?3) OR (updated_at >= ?2 AND updated_at < ?3)
                OR id IN (SELECT task_id FROM entries WHERE user_id = ?1 AND at >= ?2 AND at < ?3))
-             ORDER BY updated_at DESC, id DESC"
+             ORDER BY updated_at DESC, seq DESC"
         ))?;
         let rows = stmt
             .query_map(params![user, from, to], task_row)?
@@ -433,7 +496,7 @@ impl Store {
 
     pub fn all_tasks(&self, user: &str) -> StoreResult<Vec<Task>> {
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {TASK_COLUMNS} FROM tasks WHERE user_id = ?1 ORDER BY created_at, id"
+            "SELECT {TASK_COLUMNS} FROM tasks WHERE user_id = ?1 ORDER BY created_at, seq"
         ))?;
         let rows = stmt
             .query_map(params![user], task_row)?
@@ -460,7 +523,7 @@ impl Store {
         let existing: Option<i64> = {
             let mut stmt = tx.prepare(
                 "SELECT id, title FROM tasks WHERE user_id = ?1 AND status = 'paused'
-                 ORDER BY updated_at DESC, id DESC",
+                 ORDER BY updated_at DESC, seq DESC",
             )?;
             let paused = stmt
                 .query_map(params![user], |r| {
@@ -472,23 +535,24 @@ impl Store {
                 .find(|(_, t)| same_title(t, title))
                 .map(|(id, _)| id)
         };
-        let (id, resumed) = match existing {
-            Some(id) => {
-                activate(&tx, id, now)?;
-                (id, true)
+        let (key, resumed) = match existing {
+            Some(key) => {
+                activate(&tx, key, now)?;
+                (key, true)
             }
             None => {
                 tx.execute(
-                    "INSERT INTO tasks (user_id, title, status, created_at, updated_at, active_since)
-                     VALUES (?1, ?2, 'active', ?3, ?3, ?3)",
+                    &format!(
+                        "INSERT INTO tasks (user_id, seq, title, status, created_at, updated_at, active_since)
+                         VALUES (?1, {}, ?2, 'active', ?3, ?3, ?3)",
+                        next_seq("tasks")
+                    ),
                     params![user, title, now],
                 )?;
                 (tx.last_insert_rowid(), false)
             }
         };
-        let current = task_in(&tx, user, id)?.ok_or_else(|| {
-            StoreError::Conflict("the task changed while it was being set".into())
-        })?;
+        let current = task_by_key(&tx, key)?;
         tx.commit()?;
         Ok(Switched {
             current,
@@ -498,8 +562,8 @@ impl Store {
         })
     }
 
-    /// Change a task's status. Active resumes it (and pauses the current
-    /// one); done and dropped end it.
+    /// Change a task's status. Active makes it current again, from paused,
+    /// done or dropped (and pauses the current one); done and dropped end it.
     pub fn update_task(
         &mut self,
         user: &str,
@@ -514,16 +578,15 @@ impl Store {
         if status == Status::Active {
             if task.status != "active" {
                 paused = pause_active(&tx, user, now)?;
-                activate(&tx, id, now)?;
+                activate(&tx, task.key, now)?;
             }
         } else {
             tx.execute(
                 "UPDATE tasks SET status = ?1, active_since = NULL, updated_at = ?2 WHERE id = ?3",
-                params![status.as_str(), now, id],
+                params![status.as_str(), now, task.key],
             )?;
         }
-        let task =
-            task_in(&tx, user, id)?.ok_or_else(|| StoreError::NotFound(format!("no task {id}")))?;
+        let task = task_by_key(&tx, task.key)?;
         tx.commit()?;
         Ok(Updated { task, paused })
     }
@@ -532,15 +595,18 @@ impl Store {
 
     pub fn open_thread(&mut self, user: &str, note: &str, now: i64) -> StoreResult<Thread> {
         self.conn.execute(
-            "INSERT INTO threads (user_id, note, opened_at) VALUES (?1, ?2, ?3)",
+            &format!(
+                "INSERT INTO threads (user_id, seq, note, opened_at) VALUES (?1, {}, ?2, ?3)",
+                next_seq("threads")
+            ),
             params![user, note, now],
         )?;
-        Ok(Thread {
-            id: self.conn.last_insert_rowid(),
-            note: note.into(),
-            opened_at: now,
-            closed_at: None,
-        })
+        let key = self.conn.last_insert_rowid();
+        Ok(self.conn.query_row(
+            &format!("SELECT {THREAD_COLUMNS} FROM threads WHERE id = ?1"),
+            params![key],
+            thread_row,
+        )?)
     }
 
     /// Close a loose end; closing a closed one changes nothing.
@@ -548,7 +614,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         let thread = tx
             .query_row(
-                "SELECT id, note, opened_at, closed_at FROM threads WHERE user_id = ?1 AND id = ?2",
+                &format!("SELECT {THREAD_COLUMNS} FROM threads WHERE user_id = ?1 AND seq = ?2"),
                 params![user, id],
                 thread_row,
             )
@@ -559,7 +625,7 @@ impl Store {
         }
         tx.execute(
             "UPDATE threads SET closed_at = ?1 WHERE id = ?2",
-            params![now, id],
+            params![now, thread.key],
         )?;
         tx.commit()?;
         Ok((
@@ -573,10 +639,10 @@ impl Store {
 
     /// Open loose ends, oldest first.
     pub fn open_threads(&self, user: &str) -> StoreResult<Vec<Thread>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, note, opened_at, closed_at FROM threads WHERE user_id = ?1 AND closed_at IS NULL
-             ORDER BY opened_at, id",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {THREAD_COLUMNS} FROM threads WHERE user_id = ?1 AND closed_at IS NULL
+             ORDER BY opened_at, seq"
+        ))?;
         let rows = stmt
             .query_map(params![user], thread_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -590,17 +656,17 @@ impl Store {
         from: i64,
         to: i64,
     ) -> StoreResult<(Vec<Thread>, Vec<Thread>)> {
-        let mut opened = self.conn.prepare(
-            "SELECT id, note, opened_at, closed_at FROM threads WHERE user_id = ?1 AND opened_at >= ?2 AND opened_at < ?3
-             ORDER BY opened_at, id",
-        )?;
+        let mut opened = self.conn.prepare(&format!(
+            "SELECT {THREAD_COLUMNS} FROM threads WHERE user_id = ?1 AND opened_at >= ?2 AND opened_at < ?3
+             ORDER BY opened_at, seq"
+        ))?;
         let opened = opened
             .query_map(params![user, from, to], thread_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut closed = self.conn.prepare(
-            "SELECT id, note, opened_at, closed_at FROM threads WHERE user_id = ?1 AND closed_at >= ?2 AND closed_at < ?3
-             ORDER BY closed_at, id",
-        )?;
+        let mut closed = self.conn.prepare(&format!(
+            "SELECT {THREAD_COLUMNS} FROM threads WHERE user_id = ?1 AND closed_at >= ?2 AND closed_at < ?3
+             ORDER BY closed_at, seq"
+        ))?;
         let closed = closed
             .query_map(params![user, from, to], thread_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -608,9 +674,9 @@ impl Store {
     }
 
     pub fn all_threads(&self, user: &str) -> StoreResult<Vec<Thread>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, note, opened_at, closed_at FROM threads WHERE user_id = ?1 ORDER BY opened_at, id",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {THREAD_COLUMNS} FROM threads WHERE user_id = ?1 ORDER BY opened_at, seq"
+        ))?;
         let rows = stmt
             .query_map(params![user], thread_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -632,25 +698,7 @@ impl Store {
     }
 
     pub fn save_plan(&mut self, plan: &Plan) -> StoreResult<()> {
-        self.conn.execute(
-            "INSERT INTO plans (user_id, enabled, every_minutes, quiet_from, quiet_until, timezone, next_due_at, oneoff_at, unanswered)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled, every_minutes = excluded.every_minutes,
-               quiet_from = excluded.quiet_from, quiet_until = excluded.quiet_until, timezone = excluded.timezone,
-               next_due_at = excluded.next_due_at, oneoff_at = excluded.oneoff_at, unanswered = excluded.unanswered",
-            params![
-                plan.user_id,
-                plan.enabled as i64,
-                plan.every_minutes,
-                plan.quiet.map(|q| q.0 as i64),
-                plan.quiet.map(|q| q.1 as i64),
-                plan.timezone,
-                plan.next_due_at,
-                plan.oneoff_at,
-                plan.unanswered
-            ],
-        )?;
-        Ok(())
+        Ok(save_plan_in(&self.conn, plan)?)
     }
 
     /// Plans with a check-in due at `now`: the chain's (when on) or one asked
@@ -673,6 +721,36 @@ impl Store {
             params![user, at],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Raise a check-in and save the plan that moved past it, together: a
+    /// failure leaves neither, so the next tick decides again.
+    pub fn raise_and_save(&mut self, plan: &Plan, at: i64) -> StoreResult<i64> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO checkins (user_id, raised_at) VALUES (?1, ?2)",
+            params![plan.user_id, at],
+        )?;
+        let id = tx.last_insert_rowid();
+        save_plan_in(&tx, plan)?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// The person's newest check-in, if it is unanswered and its notice has
+    /// not gone out: (id, raised_at). An older one is replaced by it anyway.
+    pub fn unsent_checkin(&self, user: &str) -> StoreResult<Option<(i64, i64)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, raised_at, notified FROM checkins
+                 WHERE user_id = ?1 AND answered_at IS NULL ORDER BY raised_at DESC, id DESC LIMIT 1",
+                params![user],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)?)),
+            )
+            .optional()?
+            .filter(|(_, _, notified)| *notified == 0)
+            .map(|(id, at, _)| (id, at)))
     }
 
     pub fn mark_notified(&mut self, id: i64) -> StoreResult<()> {
@@ -715,6 +793,19 @@ impl Store {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+}
+
+#[cfg(test)]
+impl Store {
+    /// Make every plan update for `user` fail, as a full disk would.
+    pub fn fail_plan_updates_for(&mut self, user: &str) {
+        self.conn
+            .execute_batch(&format!(
+                "CREATE TRIGGER fail_{user} BEFORE UPDATE ON plans WHEN NEW.user_id = '{user}'
+                 BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+            ))
+            .unwrap();
     }
 }
 
@@ -871,6 +962,61 @@ mod tests {
         assert_eq!(s.answer_checkins("owner", 250).unwrap(), 2);
         assert_eq!(s.checkin_counts("owner", 0, 1000).unwrap(), (2, 2));
         assert!(s.all_checkins("owner").unwrap()[0].notified);
+    }
+
+    #[test]
+    fn a_check_in_and_its_plan_are_saved_together() {
+        let mut s = store();
+        let mut p = Plan::new("owner", &PlanDefaults::default(), "UTC");
+        p.next_due_at = Some(500);
+        s.save_plan(&p).unwrap();
+        s.conn
+            .execute_batch(
+                "CREATE TRIGGER no_plans BEFORE UPDATE ON plans BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+            )
+            .unwrap();
+        p.unanswered = 1;
+        p.next_due_at = Some(3200);
+        assert!(s.raise_and_save(&p, 500).is_err());
+        assert!(
+            s.all_checkins("owner").unwrap().is_empty(),
+            "no orphan check-in"
+        );
+        assert_eq!(s.plan("owner").unwrap().unwrap().unanswered, 0);
+    }
+
+    #[test]
+    fn only_the_newest_unanswered_check_in_waits_for_its_notice() {
+        let mut s = store();
+        assert_eq!(s.unsent_checkin("owner").unwrap(), None);
+        let first = s.raise_checkin("owner", 100).unwrap();
+        assert_eq!(s.unsent_checkin("owner").unwrap(), Some((first, 100)));
+        s.mark_notified(first).unwrap();
+        assert_eq!(s.unsent_checkin("owner").unwrap(), None);
+        let second = s.raise_checkin("owner", 200).unwrap();
+        assert_eq!(s.unsent_checkin("owner").unwrap(), Some((second, 200)));
+        s.answer_checkins("owner", 250).unwrap();
+        assert_eq!(s.unsent_checkin("owner").unwrap(), None, "answered");
+        assert_eq!(s.unsent_checkin("guest").unwrap(), None);
+    }
+
+    #[test]
+    fn an_entry_shows_only_its_own_persons_task() {
+        let mut s = store();
+        s.set_task("owner", "Mine", 100).unwrap();
+        s.insert_entry("owner", 110, "working", None, None).unwrap();
+        // Rewire the entry to the guest's task row by hand, as a reused row
+        // id after a delete could: the join still shows nothing of theirs.
+        s.set_task("guest", "Theirs", 120).unwrap();
+        s.conn
+            .execute(
+                "UPDATE entries SET task_id = (SELECT id FROM tasks WHERE user_id = 'guest')",
+                [],
+            )
+            .unwrap();
+        let entry = &s.recent_entries("owner", 1).unwrap()[0];
+        assert_eq!(entry.task, None);
+        assert_eq!(entry.task_id, None);
     }
 
     #[test]

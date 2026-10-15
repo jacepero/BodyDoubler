@@ -42,10 +42,10 @@ fn at(h: i64, m: i64) -> i64 {
 static HARNESSES: AtomicUsize = AtomicUsize::new(0);
 
 async fn harness() -> Harness {
-    harness_with(vec!["owner".into()]).await
+    harness_with(Some("owner".into())).await
 }
 
-async fn harness_with(notices_for: Vec<String>) -> Harness {
+async fn harness_with(notices_for: Option<String>) -> Harness {
     let calls: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
     let down = Arc::new(Mutex::new(false));
     let route = |path: &'static str| {
@@ -141,10 +141,14 @@ impl Harness {
     }
 
     async fn tick(&self) -> Value {
-        let token = self.token(IdentitySubject::Scheduler, &["command"]);
-        let (status, body) = self.post("checkin_tick", Some(token), json!({})).await;
+        let (status, body) = self.tick_status().await;
         assert_eq!(status, 200, "tick: {body}");
         body
+    }
+
+    async fn tick_status(&self) -> (u16, Value) {
+        let token = self.token(IdentitySubject::Scheduler, &["command"]);
+        self.post("checkin_tick", Some(token), json!({})).await
     }
 
     fn notices(&self) -> Vec<Value> {
@@ -337,6 +341,48 @@ async fn people_only_ever_see_their_own_journal() {
 }
 
 #[tokio::test]
+async fn ids_are_each_persons_own_so_nobody_can_count_anothers_writes() {
+    let h = harness().await;
+    let first = h.call("log", json!({"text": "one"})).await;
+    for i in 0..3 {
+        let (status, _) = h
+            .call_as("guest", "log", json!({"text": format!("guest {i}")}))
+            .await;
+        assert_eq!(status, 200);
+    }
+    let (_, theirs) = h
+        .call_as("guest", "open_thread", json!({"note": "theirs"}))
+        .await;
+    let (_, their_task) = h
+        .call_as("guest", "set_task", json!({"title": "Theirs"}))
+        .await;
+    let second = h.call("log", json!({"text": "two"})).await;
+    assert_eq!(first["logged"]["id"], 1);
+    assert_eq!(
+        second["logged"]["id"], 2,
+        "not 5: the guest's three are not counted"
+    );
+    let mine = h.call("open_thread", json!({"note": "mine"})).await;
+    assert_eq!(mine["thread"]["id"], 1);
+    assert_eq!(theirs["thread"]["id"], 1);
+    let task = h.call("set_task", json!({"title": "Mine"})).await;
+    assert_eq!(task["current_task"]["id"], 1);
+    assert_eq!(their_task["current_task"]["id"], 1);
+
+    // The same number names each person's own row.
+    let closed = h.call("close_thread", json!({"thread_id": 1})).await;
+    assert_eq!(closed["thread"]["note"], "mine");
+    let (_, still) = h.call_as("guest", "now", json!({})).await;
+    assert_eq!(still["open_threads"][0]["note"], "theirs");
+    let logged = h.call("log", json!({"text": "on mine"})).await;
+    assert_eq!(logged["logged"]["task"], "Mine");
+    let (_, theirs) = h
+        .call_as("guest", "log", json!({"text": "on theirs"}))
+        .await;
+    assert_eq!(theirs["logged"]["task"], "Theirs");
+}
+
+#[tokio::test]
 async fn tools_need_the_right_effect_and_a_kernel_identity() {
     let h = harness().await;
     let owner = || IdentitySubject::Human("owner".into());
@@ -451,9 +497,11 @@ async fn a_quiet_person_gets_a_check_in_and_answering_retires_it() {
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0]["category"], CHECKIN_CATEGORY);
     assert_eq!(notices[0]["title"], "Check-in");
+    // No task title, no loose end: a notice is a proactive output kept in
+    // the kernel's database.
     assert_eq!(
         notices[0]["body"],
-        "Still on WGU assignment? 45m in.\nLoose end: email Dana re: schema review"
+        "Still on your current task? 45m in.\n1 loose end open."
     );
     assert_eq!(notices[0]["channels"], json!(["in-app"]));
     assert_eq!(notices[0]["subject"], "body-double/owner/checkin");
@@ -560,7 +608,7 @@ async fn check_ins_can_be_turned_off_and_tuned() {
 
 #[tokio::test]
 async fn people_outside_notices_for_see_check_ins_only_in_their_own_view() {
-    let h = harness_with(vec![]).await;
+    let h = harness_with(None).await;
     h.call("log", json!({"text": "working"})).await;
     h.set_now(at(14, 45));
     let tick = h.tick().await;
@@ -575,16 +623,42 @@ async fn people_outside_notices_for_see_check_ins_only_in_their_own_view() {
 }
 
 #[tokio::test]
-async fn a_refused_notice_still_leaves_the_check_in_raised() {
+async fn a_refused_notice_fails_the_tick_and_is_sent_again() {
     let h = harness().await;
-    h.call("log", json!({"text": "working"})).await;
+    h.call("checkins", json!({"on": false})).await;
+    // Asked for, with the chain off: the one notice the person wanted.
+    h.call("checkins", json!({"next_in_minutes": 25})).await;
     *h.kernel_down.lock().unwrap() = true;
-    h.set_now(at(14, 45));
-    let tick = h.tick().await;
-    assert_eq!(tick["raised"], 1);
-    assert_eq!(tick["notified"], 0);
-    assert_eq!(tick["errors"].as_array().unwrap().len(), 1, "{tick}");
+    h.set_now(at(14, 25));
+    let (status, body) = h.tick_status().await;
+    assert_eq!(status, 502, "the audit shows a failed call: {body}");
+    let error = body["error"].as_str().unwrap();
+    assert!(error.contains("1 raised, 0 notified"), "{error}");
+    assert!(
+        error.contains("owner: the kernel refused the notice (503)"),
+        "{error}"
+    );
     assert_eq!(h.call("now", json!({})).await["checkins"]["due"], true);
+
+    // Still down: tried again, still a failure, nothing raised twice.
+    h.set_now(at(14, 30));
+    assert_eq!(h.tick_status().await.0, 502);
+    *h.kernel_down.lock().unwrap() = false;
+    h.set_now(at(14, 35));
+    let tick = h.tick().await;
+    assert_eq!(
+        (tick["raised"].as_i64(), tick["notified"].as_i64()),
+        (Some(0), Some(1)),
+        "{tick}"
+    );
+    assert_eq!(h.notices().len(), 3, "two refused, then delivered");
+    assert_eq!(h.notices()[2]["subject"], "body-double/owner/checkin");
+    // Delivered once: the next tick sends nothing.
+    h.set_now(at(14, 40));
+    assert_eq!(h.tick().await["notified"], 0);
+    assert_eq!(h.notices().len(), 3);
+    let day = h.call("day", json!({})).await;
+    assert_eq!(day["checkins"], json!({"raised": 1, "answered": 0}));
 }
 
 #[tokio::test]
@@ -629,9 +703,9 @@ async fn the_journal_downloads_as_markdown_or_json_through_the_proxy() {
     let content = md.text().await.unwrap();
     assert!(content.starts_with("# Body double journal"));
     assert!(content.contains("## 2026-10-15 (Thu 15 Oct)"));
-    assert!(content.contains("- **09:00** clearing email — _Email_ `[focused]` (Inbox)"));
-    assert!(content.contains("- [active] Inbox ← current"));
-    assert!(content.contains("- [open] reply to Sam"));
+    assert!(content.contains("- **09:00** clearing email — _Email_ · mood: focused (Inbox)"));
+    assert!(content.contains("- active: Inbox ← current"));
+    assert!(content.contains("- open: reply to Sam"));
 
     let js = get(
         "?format=json&from=2026-10-15&to=2026-10-15",
@@ -662,6 +736,67 @@ async fn the_journal_downloads_as_markdown_or_json_through_the_proxy() {
     // Export is not a tool: it never goes into a chat turn.
     let (status, _) = h.call_as("owner", "export", json!({})).await;
     assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn the_markdown_export_shows_the_persons_text_and_never_runs_it() {
+    let h = harness().await;
+    h.set_now(at(9, 0));
+    h.call(
+        "set_task",
+        json!({"title": "Real <img src=x onerror=alert(1)>"}),
+    )
+    .await;
+    h.call(
+        "log",
+        json!({"text": "line one\r# Injected heading\n- forged item\u{2028}[link](javascript:x)", "summary": "fine_\n## fake day"}),
+    )
+    .await;
+    h.call("open_thread", json!({"note": "a\n\n<script>x</script>"}))
+        .await;
+    let token = h.identity.mint(
+        IdentitySubject::Human("owner".into()),
+        "body-double",
+        IdentityPurpose::Data,
+        &["read".to_string()],
+        300,
+    );
+    let content = h
+        .http
+        .get(format!("{}/export", h.url))
+        .header("x-greenhouse-identity", token)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    for line in content.lines() {
+        assert!(
+            !line.starts_with("# Injected")
+                && !line.starts_with("- forged")
+                && !line.starts_with("## fake"),
+            "a forged line: {line:?}\n{content}"
+        );
+    }
+    // Every syntax character in the person's text is escaped.
+    for (i, c) in content.char_indices() {
+        if matches!(c, '<' | '>' | '[' | ']') {
+            assert_eq!(&content[i - 1..i], "\\", "bare {c:?} at {i}\n{content}");
+        }
+    }
+    assert!(
+        content.contains("- open: a  \\<script\\>x\\</script\\>"),
+        "{content}"
+    );
+    assert!(
+        content.contains("Real \\<img src=x onerror=alert(1)\\>"),
+        "{content}"
+    );
+    assert!(
+        content.contains("- **09:00** line one \\# Injected heading - forged item \\[link\\](javascript:x) — _fine\\_ \\#\\# fake day_"),
+        "{content}"
+    );
 }
 
 #[tokio::test]
@@ -770,7 +905,7 @@ async fn registration_sends_a_valid_manifest_and_learns_the_kernel_key() {
         port: 0,
         service_token: CREDENTIAL.into(),
         timezone: "UTC".into(),
-        notices_for: vec![],
+        notices_for: None,
         defaults: PlanDefaults::default(),
     })
     .unwrap();

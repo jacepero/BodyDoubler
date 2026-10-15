@@ -232,7 +232,7 @@ impl Ctx<'_> {
     }
 
     pub fn notices(&self) -> bool {
-        self.cfg.notices_for.iter().any(|u| u == self.user)
+        self.cfg.notices(self.user)
     }
 }
 
@@ -476,6 +476,25 @@ pub fn export(store: &Store, ctx: &Ctx, args: &Value) -> Result<Export, ApiError
     })
 }
 
+/// The person's text as inline Markdown: one line, and literal. Line breaks
+/// (any kind) become spaces, so text cannot start a heading or a list item,
+/// and Markdown's and HTML's syntax characters are escaped, so a title like
+/// `<img src=x onerror=…>` is shown, not run, by a viewer.
+fn md_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '&' | '~' | '|' | '#' => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control() || c == '\u{2028}' || c == '\u{2029}' => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn markdown(
     ctx: &Ctx,
     zone: &Zone,
@@ -490,7 +509,7 @@ fn markdown(
             "Exported {} ({}) for {}.",
             time::stamp(zone, ctx.now),
             zone.name,
-            ctx.user
+            md_text(ctx.user)
         ),
         String::new(),
     ];
@@ -509,19 +528,15 @@ fn markdown(
             md.push(String::new());
             day = Some(d);
         }
-        let mut line = format!(
-            "- **{}** {}",
-            time::hhmm(zone, e.at),
-            e.text.replace('\n', " ")
-        );
+        let mut line = format!("- **{}** {}", time::hhmm(zone, e.at), md_text(&e.text));
         if let Some(s) = &e.summary {
-            line.push_str(&format!(" — _{s}_"));
+            line.push_str(&format!(" — _{}_", md_text(s)));
         }
         if let Some(m) = &e.mood {
-            line.push_str(&format!(" `[{m}]`"));
+            line.push_str(&format!(" · mood: {}", md_text(m)));
         }
         if let Some(t) = &e.task {
-            line.push_str(&format!(" ({t})"));
+            line.push_str(&format!(" ({})", md_text(t)));
         }
         md.push(line);
     }
@@ -537,7 +552,7 @@ fn markdown(
             } else {
                 ""
             };
-            md.push(format!("- [{}] {}{current}", t.status, t.title));
+            md.push(format!("- {}: {}{current}", t.status, md_text(&t.title)));
         }
         md.push(String::new());
     }
@@ -550,7 +565,7 @@ fn markdown(
             } else {
                 "open"
             };
-            md.push(format!("- [{state}] {}", t.note));
+            md.push(format!("- {state}: {}", md_text(&t.note)));
         }
         md.push(String::new());
     }
@@ -790,7 +805,7 @@ pub fn set_checkins(store: &mut Store, ctx: &Ctx, args: &Value) -> Result<Outcom
 
 // ---- the scheduled tick ----------------------------------------------------------------
 
-/// A notice the tick decided to raise; sent after the journal is released.
+/// A notice the tick decided to send; sent after the journal is released.
 pub struct Notice {
     pub checkin_id: i64,
     pub user: String,
@@ -805,9 +820,12 @@ pub struct Tick {
     pub deferred: usize,
     pub paused: usize,
     pub notices: Vec<Notice>,
+    /// People whose check-in could not be recorded; the next tick tries again.
+    pub errors: Vec<String>,
 }
 
-/// Decide and record every due check-in; the notices go out afterwards.
+/// Decide and record every due check-in; the notice goes out afterwards.
+/// One person's failure does not stop the others'.
 pub fn tick(
     store: &mut Store,
     cfg: &AppConfig,
@@ -823,42 +841,100 @@ pub fn tick(
         let zone = time::zone_or(&plan.timezone, default_zone);
         let step = checkins::step(&plan, &zone, now);
         checkins::apply(&mut plan, &step, now);
-        match step {
-            Step::Wait => {}
-            Step::Defer { .. } => {
-                store.save_plan(&plan).map_err(store_error)?;
-                out.deferred += 1;
-            }
-            Step::Raise { next } => {
-                let id = store
-                    .raise_checkin(&plan.user_id, now)
-                    .map_err(store_error)?;
-                store.save_plan(&plan).map_err(store_error)?;
+        let recorded = match step {
+            Step::Wait => Ok(()),
+            Step::Defer { .. } => store.save_plan(&plan).map(|()| out.deferred += 1),
+            Step::Raise { next } => store.raise_and_save(&plan, now).map(|_| {
                 out.raised += 1;
                 if next.is_none() {
                     out.paused += 1;
                 }
-                if cfg.notices_for.contains(&plan.user_id) {
-                    let task = store.active_task(&plan.user_id).map_err(store_error)?;
-                    let loose = store.open_threads(&plan.user_id).map_err(store_error)?;
-                    let (title, body) = checkins::notice_text(
-                        task.as_ref().map(|t| {
-                            (
-                                t.title.as_str(),
-                                time::minutes_between(t.active_since.unwrap_or(t.updated_at), now),
-                            )
-                        }),
-                        loose.first().map(|t| t.note.as_str()),
-                    );
-                    out.notices.push(Notice {
-                        checkin_id: id,
-                        user: plan.user_id.clone(),
-                        title,
-                        body,
-                    });
-                }
-            }
+            }),
+        };
+        if let Err(e) = recorded {
+            out.errors
+                .push(format!("{}: {}", plan.user_id, store_error(e).message));
+        }
+    }
+    // The owner's notice: for the check-in just raised, or for an earlier one
+    // whose notice did not go out.
+    if let Some(owner) = &cfg.notices_for {
+        match unsent_notice(store, owner, now) {
+            Ok(notice) => out.notices.extend(notice),
+            Err(e) => out
+                .errors
+                .push(format!("{owner}: {}", store_error(e).message)),
         }
     }
     Ok(out)
+}
+
+fn unsent_notice(store: &Store, user: &str, now: i64) -> Result<Option<Notice>, StoreError> {
+    let Some((id, _)) = store.unsent_checkin(user)? else {
+        return Ok(None);
+    };
+    let task = store.active_task(user)?;
+    let loose_ends = store.open_threads(user)?.len();
+    let (title, body) = checkins::notice_text(
+        task.map(|t| time::minutes_between(t.active_since.unwrap_or(t.updated_at), now)),
+        loose_ends,
+    );
+    Ok(Some(Notice {
+        checkin_id: id,
+        user: user.to_string(),
+        title,
+        body,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::PlanDefaults;
+
+    fn cfg() -> AppConfig {
+        AppConfig {
+            kernel_url: String::new(),
+            state_dir: std::path::PathBuf::new(),
+            port: 0,
+            service_token: String::new(),
+            timezone: "UTC".into(),
+            notices_for: Some("a".into()),
+            defaults: PlanDefaults::default(),
+        }
+    }
+
+    #[test]
+    fn one_persons_failure_does_not_stop_the_others_check_ins() {
+        let mut store = Store::in_memory().unwrap();
+        for user in ["a", "b", "c"] {
+            let mut p = Plan::new(user, &PlanDefaults::default(), "");
+            p.quiet = None;
+            p.next_due_at = Some(1000);
+            store.save_plan(&p).unwrap();
+        }
+        store.fail_plan_updates_for("b");
+        let tick = tick(&mut store, &cfg(), &Zone::utc(), 1000).unwrap();
+        assert_eq!(tick.due, 3);
+        assert_eq!(tick.raised, 2, "a and c");
+        assert_eq!(tick.errors.len(), 1);
+        assert!(tick.errors[0].starts_with("b: "), "{:?}", tick.errors);
+        assert_eq!(tick.notices.len(), 1, "a's notice is not lost");
+        assert_eq!(tick.notices[0].user, "a");
+        assert!(
+            store.all_checkins("b").unwrap().is_empty(),
+            "b is decided again next tick"
+        );
+    }
+
+    #[test]
+    fn md_text_keeps_the_words_on_one_literal_line() {
+        assert_eq!(
+            md_text("plain words, 3 of them."),
+            "plain words, 3 of them."
+        );
+        assert_eq!(md_text("a\r\nb\u{2028}c\td"), "a  b c d");
+        assert_eq!(md_text("<b>*x*</b>"), "\\<b\\>\\*x\\*\\</b\\>");
+        assert_eq!(md_text("[a](b) `c` #d"), "\\[a\\](b) \\`c\\` \\#d");
+    }
 }

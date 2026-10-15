@@ -98,7 +98,7 @@ pub fn manifest() -> Value {
                 "Body double: record what the person says they are doing or feeling, in their own words (text), with a one-line summary. Mood only if clearly stated.",
                 object(json!({"text": text(2000), "summary": text(200), "mood": text(40)}), &["text"])),
             tool("set_task",
-                "Body double: the person started or switched to a task. The previous one is paused.",
+                "Body double: the person started or switched to a task; call before log. The previous one is paused.",
                 object(json!({"title": text(200)}), &["title"])),
             tool("update_task",
                 "Body double: set a task's status by id: done, dropped, paused, or active to resume it.",
@@ -196,7 +196,7 @@ impl AppState {
     /// The person answered (or turned check-ins off): their unread check-in
     /// notice comes down. Best effort; a newer check-in replaces it anyway.
     async fn retire(&self, user: &str) {
-        if !self.cfg.notices_for.iter().any(|u| u == user) {
+        if !self.cfg.notices(user) {
             return;
         }
         let result = self
@@ -383,8 +383,9 @@ async fn run_tick(app: &AppState, args: &Value, now: i64) -> ApiResult<Value> {
         let mut store = app.store.lock().unwrap();
         tools::tick(&mut store, &app.cfg, &app.default_zone, now)?
     };
+    let mut errors = tick.errors;
+    let recorded = errors.is_empty();
     let mut notified = 0;
-    let mut errors = Vec::new();
     for notice in &tick.notices {
         match app.notify(notice).await {
             Ok(()) => {
@@ -397,10 +398,21 @@ async fn run_tick(app: &AppState, args: &Value, now: i64) -> ApiResult<Value> {
                     ));
                 }
             }
-            // The check-in stays raised (the page and `now` show it due);
-            // only the notice is missing.
+            // The check-in stays raised (the page and `now` show it due) and
+            // its notice is sent again at the next tick.
             Err(e) => errors.push(format!("{}: {e}", notice.user)),
         }
+    }
+    let summary = format!(
+        "{} due, {} raised, {} notified, {} held for quiet hours",
+        tick.due, tick.raised, notified, tick.deferred
+    );
+    if !errors.is_empty() {
+        // Not a success: the kernel's tool audit and Activity show the call
+        // as failed, as for the house check.
+        let message = format!("check-in tick: {summary}; {}", errors.join("; "));
+        eprintln!("[body-double] {message}");
+        return Err(err(if recorded { 502 } else { 500 }, message));
     }
     Ok(json!({
         "due": tick.due,
@@ -408,7 +420,6 @@ async fn run_tick(app: &AppState, args: &Value, now: i64) -> ApiResult<Value> {
         "notified": notified,
         "deferred_for_quiet": tick.deferred,
         "paused": tick.paused,
-        "errors": errors,
     }))
 }
 

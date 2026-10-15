@@ -1,6 +1,6 @@
 {
   "version": "greenhouse-body-double-config-v1",
   "timezone": "America/New_York",
-  "notices_for": ["owner"],
+  "notices_for": "owner",
   "checkins": {"on": true, "every_minutes": 45, "quiet_from": "22:00", "quiet_until": "08:00"}
 }

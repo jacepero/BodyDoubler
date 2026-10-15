@@ -181,20 +181,19 @@ pub fn apply(plan: &mut Plan, step: &Step, now: i64) {
 }
 
 /// A check-in's notice: title and body, from templates. No model is asked,
-/// and moods are never part of it.
-pub fn notice_text(task: Option<(&str, i64)>, loose_end: Option<&str>) -> (String, String) {
-    let mut body = match task {
-        Some((title, minutes)) => format!("Still on {title}? {} in.", time::span(minutes)),
+/// and none of the person's words are in it: no task title, no loose end, no
+/// mood. A notice is a proactive output kept in the kernel's database, so it
+/// says only how long the current task has run and how many loose ends are
+/// open; the page and the assistant say what they are.
+pub fn notice_text(task_minutes: Option<i64>, loose_ends: usize) -> (String, String) {
+    let mut body = match task_minutes {
+        Some(minutes) => format!("Still on your current task? {} in.", time::span(minutes)),
         None => "What are you working on?".to_string(),
     };
-    if let Some(note) = loose_end {
-        let short: String = note.chars().take(120).collect();
-        let more = if note.chars().count() > 120 {
-            "…"
-        } else {
-            ""
-        };
-        body.push_str(&format!("\nLoose end: {short}{more}"));
+    match loose_ends {
+        0 => {}
+        1 => body.push_str("\n1 loose end open."),
+        n => body.push_str(&format!("\n{n} loose ends open.")),
     }
     ("Check-in".to_string(), body)
 }
@@ -378,14 +377,16 @@ mod tests {
     }
 
     #[test]
-    fn the_notice_is_a_template_without_moods() {
-        let (title, body) = notice_text(Some(("WGU assignment", 130)), None);
+    fn the_notice_is_a_template_without_the_persons_words() {
+        let (title, body) = notice_text(Some(130), 0);
         assert_eq!(title, "Check-in");
-        assert_eq!(body, "Still on WGU assignment? 2h 10m in.");
-        let (_, body) = notice_text(None, Some("email Dana re: schema review"));
+        assert_eq!(body, "Still on your current task? 2h 10m in.");
+        let (_, body) = notice_text(None, 1);
+        assert_eq!(body, "What are you working on?\n1 loose end open.");
+        let (_, body) = notice_text(Some(5), 3);
         assert_eq!(
             body,
-            "What are you working on?\nLoose end: email Dana re: schema review"
+            "Still on your current task? 5m in.\n3 loose ends open."
         );
         assert_eq!(notice_subject("owner"), "body-double/owner/checkin");
     }
