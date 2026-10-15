@@ -11,6 +11,10 @@ call the app ever makes is the one-time model download.**
 Implements [body-double-ios-plan.md](body-double-ios-plan.md). Read that first;
 this README covers how the code maps to it and how to build.
 
+**Greenhouse version:** [`greenhouse/`](greenhouse/README.md) distils the same ideas into a
+registered app for the owner's Greenhouse platform: a Rust capability provider for the persistent
+assistant, with kernel-scheduled check-ins and SayLLM widgets.
+
 ## Building (requires a Mac)
 
 This source tree was authored off-Mac, so it has **not been compiled yet** —

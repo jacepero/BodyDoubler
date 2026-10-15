@@ -1,0 +1,37 @@
+# DEVELOPMENT STAND-IN. This is not the Greenhouse kernel and is never copied
+# into jacepero/greenhouse. It is the slice of the kernel crate that Rust apps
+# use as their SDK (error, identity, validate, cron, clock), so body-double-app
+# builds and tests outside the Greenhouse repo. In Greenhouse, kernel/ is the
+# real crate; there body-double-app's `greenhouse-kernel = { path = "../kernel" }`
+# resolves to it unchanged.
+#
+# Which modules are verbatim kernel source and which are reconstructed is in
+# src/lib.rs. The dependencies are the real kernel's own (kernel/Cargo.toml,
+# main, 2026-10-08), limited to what these five modules use.
+[package]
+name = "greenhouse-kernel"
+version = "0.1.0"
+edition = "2021"
+description = "Development stand-in for the Greenhouse kernel crate's app SDK slice (error, identity, validate, cron, clock); not the kernel"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# error.rs: the JSON error response.
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# cron.rs: cron_matches reads minute, hour, day, month and weekday.
+chrono = "0.4"
+# identity.rs: Ed25519 keys derived from the master key with HKDF-SHA256.
+ed25519-dalek = "2"
+hkdf = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+# error.rs: sha256_hex.
+hex = "0.4"
+
+[dev-dependencies]
+# identity.rs tests draw a random master key, as the kernel's do.
+getrandom = "0.3"
