@@ -22,7 +22,7 @@ platform's lines:
 | `{speech, actions[≤3]}` under a GBNF grammar; unknown tools dropped | Native tool calls through the kernel. Each tool checks its own arguments strictly; an unknown tool is a 404. |
 | Raw entry stored before inference, every time | The `log` tool stores the person's words before anything else happens. The SayLLM page's narrate box calls `log` directly, with no model in the path. |
 | SQLite (GRDB): entries, tasks, threads, check-ins, app_state | SQLite in the app's state directory, per person. |
-| Local notification chain (8 ahead), quiet hours, reply from the notification | A kernel cron schedule calls `checkin_tick` every minute. The app decides who is due, respects quiet hours, and raises an in-app notice. Answering means logging anything. |
+| Local notification chain (8 ahead), quiet hours, reply from the notification | A kernel cron schedule calls `checkin_tick` every five minutes. The app decides who is due, respects quiet hours, and raises an in-app notice. Answering means logging anything. |
 | Daily recap by the model | `day` returns the day. The assistant writes the recap in chat. |
 | Export (JSON, Markdown) | `export` returns either. |
 | TTS, push-to-talk, Live Activity | SayLLM already has voice. A Home widget shows the current task. |
@@ -166,6 +166,11 @@ short sentences, no flattery, no lectures"). They are in the manifest verbatim
 (`body-double-app/src/lib.rs`, `manifest()`), so changing one is a contract change the owner
 re-approves.
 
+They are kept short on purpose. The kernel offers every callable tool in every chat turn, with no
+relevance filtering. The nine people-facing schemas come to about 3.1 KB of JSON, roughly 780
+tokens by the chars/4 heuristic, on an 8,192-token runtime. The parameter schemas carry types,
+enums and lengths only; the app refuses anything else itself.
+
 ## Check-ins
 
 Each person has a plan: on or off, every N minutes, quiet hours, a time zone, the next due time,
@@ -174,7 +179,8 @@ configuration's defaults (45 minutes, quiet 22:00–08:00, on).
 
 - **Activity** sets the next check-in to now + N minutes, moved to the end of quiet hours if it
   lands inside them, and resets the unanswered count.
-- **The tick** runs every minute (`schedules: checkins.tick`, cron `* * * * *`). For each plan
+- **The tick** runs every five minutes (`schedules: checkins.tick`, cron `*/5 * * * *`, the
+  cadence of Home Assistant's house check). A check-in can be up to five minutes late. For each plan
   that is on and due: inside quiet hours it moves the check-in to the end of them and raises
   nothing. Otherwise it records a check-in, raises the notice if the person is in `notices_for`,
   and schedules the next one N minutes on.
@@ -188,8 +194,7 @@ configuration's defaults (45 minutes, quiet 22:00–08:00, on).
 
 Quiet hours are local to the person's zone and may wrap midnight. Times come from the kernel's
 clock (the host's zone database). The kernel does not replay a cron minute missed while it was
-down. The tick catches up on the next minute that runs, because it compares against stored due
-times.
+down. The tick catches up on the next run, because it compares against stored due times.
 
 **The notice.** Category `body-double-checkin`, sensitivity `private`, channel `in-app`, subject
 `body-double/<user>/checkin`, so a newer check-in replaces the older unread one and answering
@@ -258,7 +263,7 @@ tools:
   - { name: checkin_tick, effect: command }   # scheduled only
 events: { emits: [], subscribes: [] }
 schedules:
-  - { name: checkins.tick, cron: "* * * * *", action: checkin_tick }
+  - { name: checkins.tick, cron: "*/5 * * * *", action: checkin_tick }
 permissions:
   secrets: []
   egress: []

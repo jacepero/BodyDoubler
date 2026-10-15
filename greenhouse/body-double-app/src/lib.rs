@@ -60,78 +60,75 @@ fn tool(name: &str, description: &str, parameters: Value) -> Value {
 }
 
 fn no_arguments() -> Value {
-    json!({"type": "object", "properties": {}, "additionalProperties": false})
+    json!({"type": "object", "properties": {}})
 }
 
 /// What the app registers. The descriptions steer the assistant the way the
-/// iOS system prompt did, so they are part of the approved contract.
+/// iOS system prompt did, so they are part of the approved contract. Every
+/// chat turn carries the person's callable tool schemas, so they are kept
+/// short: the app itself refuses unknown or out-of-range arguments.
 pub fn manifest() -> Value {
     // Plain types and lengths only: tool schemas may become sampling grammars
     // on the inference node, where regex patterns are not dependable.
     let id = json!({"type": "integer", "minimum": 1});
-    let date = json!({"type": "string", "maxLength": 10, "description": "YYYY-MM-DD"});
-    let clock = json!({"type": "string", "maxLength": 5, "description": "HH:MM, 24-hour"});
+    let date = json!({"type": "string", "maxLength": 10});
+    let clock = json!({"type": "string", "maxLength": 5});
+    let text = |max: u32| json!({"type": "string", "maxLength": max});
+    let object = |properties: Value, required: &[&str]| {
+        let mut schema = json!({"type": "object", "properties": properties});
+        if !required.is_empty() {
+            schema["required"] = json!(required);
+        }
+        schema
+    };
     json!({
         "id": APP_ID,
         "version": APP_VERSION,
         "health": "/health",
         "tools": [
             tool("now",
-                "Body double: where the person is right now: current task and how long it has run, open loose ends with their ids, the last few journal entries and check-in status. Read it when they say what they are doing or ask what they were up to. Answer in at most two short sentences: acknowledge, keep them oriented, mention elapsed time or a loose end only when it helps. No flattery, no lectures.",
+                "Body double: the person's current task and how long it has run, open loose ends, recent journal entries and check-ins. Read it when they say what they are doing; reply in one or two short sentences, without flattery or lectures.",
                 no_arguments()),
             tool("day",
-                "Body double journal for one day (default today): entries in order, tasks touched, loose ends opened and closed, check-ins. Use it for recaps: what got done, what is still open, what stalled, in a few plain sentences. Mention moods only if asked.",
-                json!({"type": "object", "properties": {"date": date}, "additionalProperties": false})),
+                "Body double journal for one day (date YYYY-MM-DD, default today), for recaps. Mention moods only if asked.",
+                object(json!({"date": date}), &[])),
             tool("export",
-                "Body double: the person's whole journal, or the days from/to, as Markdown or JSON, to save a copy. Not for answering questions; use day for that.",
-                json!({"type": "object", "properties": {
-                    "format": {"type": "string", "enum": ["markdown", "json"]},
-                    "from": date, "to": date
-                }, "additionalProperties": false})),
+                "Body double journal as a file to save (markdown or json; from/to dates optional).",
+                object(json!({"format": {"type": "string", "enum": ["markdown", "json"]}, "from": date, "to": date}), &[])),
             tool("log",
-                "Body double journal: record what the person says they are doing, starting, finishing or feeling, in their own words (text). Log every such remark. Add a one-line summary; give mood only when they clearly express one. Logging answers a pending check-in.",
-                json!({"type": "object", "properties": {
-                    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
-                    "summary": {"type": "string", "maxLength": 200},
-                    "mood": {"type": "string", "maxLength": 40}
-                }, "required": ["text"], "additionalProperties": false})),
+                "Body double: record what the person says they are doing or feeling, in their own words (text), with a one-line summary. Mood only if clearly stated.",
+                object(json!({"text": text(2000), "summary": text(200), "mood": text(40)}), &["text"])),
             tool("set_task",
-                "Body double: the person started or switched to a task. Makes title the current task and pauses the previous one. An open task with the same title is resumed, not duplicated.",
-                json!({"type": "object", "properties": {
-                    "title": {"type": "string", "minLength": 1, "maxLength": 200}
-                }, "required": ["title"], "additionalProperties": false})),
+                "Body double: the person started or switched to a task. The previous one is paused.",
+                object(json!({"title": text(200)}), &["title"])),
             tool("update_task",
-                "Body double: change a task's status by its id from now or day. done or dropped ends it, paused sets it aside, active resumes it as the current task.",
-                json!({"type": "object", "properties": {
-                    "task_id": id,
-                    "status": {"type": "string", "enum": ["active", "paused", "done", "dropped"]}
-                }, "required": ["task_id", "status"], "additionalProperties": false})),
+                "Body double: set a task's status by id: done, dropped, paused, or active to resume it.",
+                object(json!({"task_id": id, "status": {"type": "string", "enum": ["active", "paused", "done", "dropped"]}}), &["task_id", "status"])),
             tool("open_thread",
-                "Body double: remember a loose end the person mentions (an email to send, something to check) so it can come up later.",
-                json!({"type": "object", "properties": {
-                    "note": {"type": "string", "minLength": 1, "maxLength": 300}
-                }, "required": ["note"], "additionalProperties": false})),
+                "Body double: remember a loose end the person mentions.",
+                object(json!({"note": text(300)}), &["note"])),
             tool("close_thread",
-                "Body double: a loose end is resolved. Close it by its id from now or day.",
-                json!({"type": "object", "properties": {"thread_id": id},
-                    "required": ["thread_id"], "additionalProperties": false})),
+                "Body double: close a loose end by id.",
+                object(json!({"thread_id": id}), &["thread_id"])),
             tool("checkins",
-                "Body double check-ins: turn them on or off, set every_minutes, quiet hours (quiet_from and quiet_until, or quiet false for none), the person's time zone, or next_in_minutes for one at a set time, such as when they start a time-boxed stretch.",
-                json!({"type": "object", "properties": {
+                "Body double check-ins: on, every_minutes, quiet hours (quiet_from, quiet_until as HH:MM; quiet false for none), timezone, or next_in_minutes for one at a set time.",
+                object(json!({
                     "on": {"type": "boolean"},
                     "every_minutes": {"type": "integer", "minimum": 10, "maximum": 240},
                     "quiet": {"type": "boolean"},
                     "quiet_from": clock,
                     "quiet_until": clock,
-                    "timezone": {"type": "string", "maxLength": 64},
+                    "timezone": text(64),
                     "next_in_minutes": {"type": "integer", "minimum": 5, "maximum": 480}
-                }, "additionalProperties": false})),
+                }), &[])),
             tool("checkin_tick",
                 "Scheduled, not for chat: raises the body-double check-ins that are due.",
                 no_arguments()),
         ],
         "events": { "emits": [], "subscribes": [] },
-        "schedules": [{ "name": "checkins.tick", "cron": "* * * * *", "action": "checkin_tick" }],
+        // Every five minutes, as Home Assistant's house check: a check-in may
+        // be up to five minutes late, and the kernel's audit is not flooded.
+        "schedules": [{ "name": "checkins.tick", "cron": "*/5 * * * *", "action": "checkin_tick" }],
         "permissions": {
             "secrets": [],
             "egress": [],
