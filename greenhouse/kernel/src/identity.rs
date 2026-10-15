@@ -261,267 +261,203 @@ mod tests {
             &["read".into()],
             300,
         );
-        // Stand-in: the rest of this test was not captured. It swaps the
-        // person in the payload and keeps the old signature.
         let parts: Vec<&str> = token.split('.').collect();
-        let payload = String::from_utf8(B64.decode(parts[1]).unwrap()).unwrap();
-        let forged = B64.encode(payload.replace("\"guest\"", "\"owner\""));
-        assert_ne!(forged, parts[1]);
+        let mut claims: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(parts[1])
+                .unwrap(),
+        )
+        .unwrap();
+        claims["g"] = serde_json::json!(["read", "write", "command"]); // escalation attempt
+        let forged = format!(
+            "{}.{}.{}",
+            parts[0],
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string()),
+            parts[2]
+        );
+        assert!(id.verify(&forged).is_none());
+    }
+
+    #[test]
+    fn expired_fails() {
+        let id = create_identity(&master());
         assert!(id
-            .verify(&format!("{}.{forged}.{}", parts[0], parts[2]))
+            .verify(&id.mint(
+                IdentitySubject::Human("owner".into()),
+                "x",
+                IdentityPurpose::Tool,
+                &[],
+                -10
+            ))
             .is_none());
     }
 
-    // Stand-in: the tests below are reconstructed. They check the behaviour
-    // apps rely on through verify_with_pem and verify_app_request.
-
-    fn tool_token(id: &Identity, subject: IdentitySubject, grants: &[&str]) -> String {
-        let grants: Vec<String> = grants.iter().map(|g| g.to_string()).collect();
-        id.mint(subject, "weather", IdentityPurpose::Tool, &grants, 300)
+    #[test]
+    fn different_master_cannot_verify() {
+        let a = create_identity(&master());
+        let b = create_identity(&master());
+        assert!(b
+            .verify(&a.mint(
+                IdentitySubject::Human("owner".into()),
+                "x",
+                IdentityPurpose::Tool,
+                &[],
+                300
+            ))
+            .is_none());
     }
 
     #[test]
-    fn the_published_pem_verifies_and_another_key_does_not() {
-        let id = create_identity(&[7u8; 32]);
-        assert!(id
-            .public_key_pem
-            .starts_with("-----BEGIN PUBLIC KEY-----\n"));
-        assert!(id.public_key_pem.ends_with("-----END PUBLIC KEY-----\n"));
-        // The same master key gives the same key pair.
-        assert_eq!(
-            create_identity(&[7u8; 32]).public_key_pem,
-            id.public_key_pem
-        );
-
-        let token = tool_token(&id, IdentitySubject::Human("owner".into()), &["read"]);
-        let claims = verify_with_pem(&id.public_key_pem, &token).unwrap();
-        assert_eq!((claims.v, claims.u.as_str()), (3, "owner"));
-        assert_eq!(claims.exp - claims.iat, 300);
-
-        let other = create_identity(&[8u8; 32]);
-        assert!(verify_with_pem(&other.public_key_pem, &token).is_none());
-        assert!(verify_with_pem("not a key", &token).is_none());
+    fn deterministic_across_restarts() {
+        let k = master();
+        let a = create_identity(&k);
+        let b = create_identity(&k);
+        assert_eq!(a.public_key_pem, b.public_key_pem);
+        assert!(b
+            .verify(&a.mint(
+                IdentitySubject::Human("owner".into()),
+                "x",
+                IdentityPurpose::Tool,
+                &[],
+                300
+            ))
+            .is_some());
     }
 
     #[test]
-    fn the_wire_form_is_v1_payload_signature() {
-        let id = create_identity(&master());
-        let token = tool_token(&id, IdentitySubject::Human("owner".into()), &["read"]);
-        let parts: Vec<&str> = token.split('.').collect();
-        assert_eq!(parts.len(), 3);
-        assert_eq!(parts[0], "v1");
-        let payload: serde_json::Value =
-            serde_json::from_slice(&B64.decode(parts[1]).unwrap()).unwrap();
-        assert_eq!(payload["s"], "human");
-        assert_eq!(payload["a"], "weather");
-        assert_eq!(payload["p"], "tool");
-        assert_eq!(payload["g"], serde_json::json!(["read"]));
-        // Another envelope version is refused.
-        let v2 = token.replacen("v1.", "v2.", 1);
-        assert!(id.verify(&v2).is_none());
-    }
-
-    #[test]
-    fn an_expired_token_is_invalid() {
+    fn pem_verification_matches() {
         let id = create_identity(&master());
         let token = id.mint(
             IdentitySubject::Human("owner".into()),
-            "weather",
+            "stub",
             IdentityPurpose::Tool,
             &["read".into()],
-            -1,
+            300,
         );
-        assert!(id.verify(&token).is_none());
-        assert_eq!(
-            verify_app_request(
-                &id.public_key_pem,
-                &token,
-                "weather",
-                IdentityPurpose::Tool,
-                None
-            ),
-            Err(IdentityError::Invalid)
-        );
+        let c = verify_with_pem(&id.public_key_pem, &token).unwrap();
+        assert_eq!(c.u, "owner");
     }
 
     #[test]
-    fn app_requests_check_audience_purpose_subject_and_effect() {
+    fn garbage_returns_none() {
         let id = create_identity(&master());
-        let pem = &id.public_key_pem;
-        let owner = || IdentitySubject::Human("owner".into());
-
-        let token = tool_token(&id, owner(), &["read", "write"]);
-        let claims =
-            verify_app_request(pem, &token, "weather", IdentityPurpose::Tool, Some("write"))
-                .unwrap();
-        assert_eq!(claims.u, "owner");
-        assert!(verify_app_request(pem, &token, "weather", IdentityPurpose::Tool, None).is_ok());
-
-        // Garbage and a token for another key are invalid.
-        assert_eq!(
-            verify_app_request(pem, "v1.e30.AAAA", "weather", IdentityPurpose::Tool, None),
-            Err(IdentityError::Invalid)
-        );
-        let stranger = tool_token(&create_identity(&[9u8; 32]), owner(), &["read"]);
-        assert_eq!(
-            verify_app_request(pem, &stranger, "weather", IdentityPurpose::Tool, None),
-            Err(IdentityError::Invalid)
-        );
-
-        // Another app's token.
-        assert_eq!(
-            verify_app_request(pem, &token, "home-assistant", IdentityPurpose::Tool, None),
-            Err(IdentityError::Audience)
-        );
-        // A tool token at a data endpoint.
-        assert_eq!(
-            verify_app_request(pem, &token, "weather", IdentityPurpose::Data, None),
-            Err(IdentityError::Purpose)
-        );
-        // Grants are not cumulative: write does not imply command.
-        assert_eq!(
-            verify_app_request(
-                pem,
-                &token,
-                "weather",
-                IdentityPurpose::Tool,
-                Some("command")
-            ),
-            Err(IdentityError::Effect)
-        );
-        let read_only = tool_token(&id, owner(), &["read"]);
-        assert_eq!(
-            verify_app_request(
-                pem,
-                &read_only,
-                "weather",
-                IdentityPurpose::Tool,
-                Some("write")
-            ),
-            Err(IdentityError::Effect)
-        );
+        for t in ["", "v1", "v1.x", "v1.x.y", "v2.a.b"] {
+            assert!(id.verify(t).is_none(), "{t}");
+        }
     }
 
     #[test]
-    fn each_purpose_admits_only_its_callers() {
+    fn app_request_requires_exact_audience_purpose_effect_and_event_caller() {
         let id = create_identity(&master());
-        let pem = &id.public_key_pem;
-        let mint = |subject: IdentitySubject, purpose: IdentityPurpose, grants: &[&str]| {
-            let grants: Vec<String> = grants.iter().map(|g| g.to_string()).collect();
-            id.mint(subject, "weather", purpose, &grants, 300)
-        };
-
-        // The scheduler calls command tools.
-        let scheduled = mint(
-            IdentitySubject::Scheduler,
-            IdentityPurpose::Tool,
-            &["command"],
-        );
-        let claims = verify_app_request(
-            pem,
-            &scheduled,
-            "weather",
-            IdentityPurpose::Tool,
-            Some("command"),
-        )
-        .unwrap();
-        assert_eq!(claims.s, IdentitySubjectKind::Scheduler);
-        assert_eq!(claims.u, "system:scheduler");
-
-        // It is never a person reading data.
-        let scheduler_data = mint(IdentitySubject::Scheduler, IdentityPurpose::Data, &["read"]);
-        assert_eq!(
-            verify_app_request(
-                pem,
-                &scheduler_data,
-                "weather",
-                IdentityPurpose::Data,
-                Some("read")
-            ),
-            Err(IdentityError::Subject)
-        );
-        let human_data = mint(
+        let read = vec!["read".into()];
+        let tool = id.mint(
             IdentitySubject::Human("owner".into()),
-            IdentityPurpose::Data,
-            &["read"],
+            "app-a",
+            IdentityPurpose::Tool,
+            &read,
+            300,
         );
-        assert!(verify_app_request(
-            pem,
-            &human_data,
-            "weather",
-            IdentityPurpose::Data,
-            Some("read")
-        )
-        .is_ok());
-
-        // Events come only from the event service, and tools never do.
-        let events_tool = mint(
+        let event = id.mint(
             IdentitySubject::EventService,
-            IdentityPurpose::Tool,
-            &["read"],
-        );
-        assert_eq!(
-            verify_app_request(pem, &events_tool, "weather", IdentityPurpose::Tool, None),
-            Err(IdentityError::Subject)
-        );
-        let event = mint(IdentitySubject::EventService, IdentityPurpose::Event, &[]);
-        let claims =
-            verify_app_request(pem, &event, "weather", IdentityPurpose::Event, None).unwrap();
-        assert_eq!(claims.u, "system:events");
-        let human_event = mint(
-            IdentitySubject::Human("owner".into()),
+            "app-a",
             IdentityPurpose::Event,
             &[],
+            300,
+        );
+        let user_event = id.mint(
+            IdentitySubject::Human("system:events".into()),
+            "app-a",
+            IdentityPurpose::Event,
+            &read,
+            300,
+        );
+        let pem = &id.public_key_pem;
+
+        assert!(
+            verify_app_request(pem, &tool, "app-a", IdentityPurpose::Tool, Some("read")).is_ok()
         );
         assert_eq!(
-            verify_app_request(pem, &human_event, "weather", IdentityPurpose::Event, None),
+            verify_app_request(pem, &tool, "app-b", IdentityPurpose::Tool, Some("read")),
+            Err(IdentityError::Audience)
+        );
+        assert_eq!(
+            verify_app_request(pem, &event, "app-a", IdentityPurpose::Tool, Some("read")),
+            Err(IdentityError::Purpose)
+        );
+        assert_eq!(
+            verify_app_request(pem, &tool, "app-a", IdentityPurpose::Event, None),
+            Err(IdentityError::Purpose)
+        );
+        assert_eq!(
+            verify_app_request(pem, &user_event, "app-a", IdentityPurpose::Event, None),
             Err(IdentityError::Subject)
         );
+    }
 
-        // The serving-state purpose admits only its own subject.
-        let serving = mint(
+    #[test]
+    fn serving_state_purpose_is_a_distinct_least_privilege_pairing() {
+        let id = create_identity(&master());
+        let pem = &id.public_key_pem;
+        let serving = id.mint(
             IdentitySubject::ServingState,
+            "node-monitor",
             IdentityPurpose::ServingState,
             &[],
+            300,
         );
+        // The dedicated serving_state identity is accepted for that purpose.
         assert!(verify_app_request(
             pem,
             &serving,
-            "weather",
+            "node-monitor",
             IdentityPurpose::ServingState,
             None
         )
         .is_ok());
-        let serving_tool = mint(
-            IdentitySubject::ServingState,
-            IdentityPurpose::Tool,
-            &["read"],
+        // The interim Data/read identity no longer reaches a serving_state endpoint.
+        let data = id.mint(
+            IdentitySubject::Human("owner".into()),
+            "node-monitor",
+            IdentityPurpose::Data,
+            &["read".into()],
+            300,
         );
         assert_eq!(
-            verify_app_request(pem, &serving_tool, "weather", IdentityPurpose::Tool, None),
-            Err(IdentityError::Subject)
+            verify_app_request(
+                pem,
+                &data,
+                "node-monitor",
+                IdentityPurpose::ServingState,
+                None
+            ),
+            Err(IdentityError::Purpose)
         );
-    }
-
-    #[test]
-    fn the_subject_is_checked_before_the_effect() {
-        // An event-service token at a tool endpoint is a subject error even
-        // when it also lacks the effect.
-        let id = create_identity(&master());
-        let token = id.mint(
-            IdentitySubject::EventService,
-            "weather",
-            IdentityPurpose::Tool,
+        // The serving_state subject cannot be replayed into user data/tool APIs.
+        assert_eq!(
+            verify_app_request(
+                pem,
+                &serving,
+                "node-monitor",
+                IdentityPurpose::Data,
+                Some("read")
+            ),
+            Err(IdentityError::Purpose)
+        );
+        // A human cannot assume the serving_state purpose (subject gate).
+        let human_serving = id.mint(
+            IdentitySubject::Human("owner".into()),
+            "node-monitor",
+            IdentityPurpose::ServingState,
             &[],
             300,
         );
         assert_eq!(
             verify_app_request(
-                &id.public_key_pem,
-                &token,
-                "weather",
-                IdentityPurpose::Tool,
-                Some("read")
+                pem,
+                &human_serving,
+                "node-monitor",
+                IdentityPurpose::ServingState,
+                None
             ),
             Err(IdentityError::Subject)
         );

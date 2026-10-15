@@ -7,8 +7,8 @@ import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
-  EVERY_CHOICES, LIMITS, attachmentName, boxText, checkinArgs, checkinPrompt, checkinSummary, deviceZone, elapsedLabel,
-  exportPath, focusView, fitWithCount, journalLimit, journalRows, looseEnds, registerBodyDoubleWidgets, spanLabel,
+  EVERY_CHOICES, EXPORT_PATH, LIMITS, attachmentName, boxText, checkinArgs, checkinPrompt, checkinSummary, deviceZone,
+  elapsedLabel, focusView, fitWithCount, journalLimit, journalRows, looseEnds, registerBodyDoubleWidgets, spanLabel,
 } from "../public/body-double-widgets.js";
 
 // The tool results as apps/body-double.md gives them.
@@ -127,19 +127,48 @@ function fakeDom() {
   return { el, button, input, icon, headButton };
 }
 
-function setup() {
+/**
+ * SayLLM's response check (auth.js assertProtectedResponse), as its contract
+ * reads: a 401, or a redirect that lands on HTML, is a lost session; HTML or
+ * the wrong type where a file was expected is an unexpected answer; anything
+ * else passes for the caller to read. Records what it was asked.
+ */
+function fakeAssert() {
+  const asked = [];
+  const assertProtectedResponse = (response, expectedType) => {
+    asked.push(expectedType);
+    const type = response.headers.get("content-type") || "";
+    if (response.status === 401 || (response.redirected && type.includes("text/html"))) {
+      throw Object.assign(new Error("Your Greenhouse session has expired. Re-authenticate to continue."), { authExpired: true });
+    }
+    if (response.ok && expectedType && !type.includes(expectedType)) {
+      throw new Error(`Greenhouse returned ${type || "an unreadable response"} where ${expectedType} was expected.`);
+    }
+    return response;
+  };
+  return { assertProtectedResponse, asked };
+}
+
+function setup({ withAssert = true } = {}) {
   const dom = fakeDom();
   const registry = new Map();
-  registerBodyDoubleWidgets({ ...dom, registerWidget: (widget) => registry.set(widget.id, widget) });
-  return { dom, registry };
+  const checker = fakeAssert();
+  registerBodyDoubleWidgets({
+    ...dom,
+    registerWidget: (widget) => registry.set(widget.id, widget),
+    ...(withAssert ? { assertProtectedResponse: checker.assertProtectedResponse } : {}),
+  });
+  return { dom, registry, asked: checker.asked };
 }
 
 /** A card's ctx as home.js gives it, recording what the card asks for. */
-function fakeCtx({ can = () => true, answer = () => ({}), size = "medium", span = [4, 3] } = {}) {
+function fakeCtx({ can = () => true, answer = () => ({}), size = "medium", span = [4, 3], fetched = null } = {}) {
   const ctx = {
     size,
     span,
     calls: [],
+    fetches: [],
+    reports: [],
     notes: [],
     refreshes: 0,
     tickers: [],
@@ -154,11 +183,20 @@ function fakeCtx({ can = () => true, answer = () => ({}), size = "medium", span 
     can: (qualified) => can(qualified),
     refresh: () => { ctx.refreshes += 1; },
     note: (text) => { ctx.notes.push(text); },
-    report: () => {},
+    report: (error) => { ctx.reports.push(error); },
     every: (ms, fn) => { ctx.tickers.push([ms, fn]); },
     subtitle: (text) => { ctx.sub = text || ""; },
     actions: (...nodes) => { ctx.head = nodes.filter(Boolean); },
   };
+  // SayLLM's locked kernel fetch (app.js kernelFetch), when the card has it.
+  if (fetched) {
+    ctx.kernelFetch = async (path, options) => {
+      ctx.fetches.push([path, options]);
+      const response = typeof fetched === "function" ? fetched() : fetched;
+      if (response instanceof Error) throw response;
+      return response;
+    };
+  }
   return ctx;
 }
 
@@ -264,11 +302,8 @@ test("Today lists the day oldest first, so the newest is last, and keeps what fi
   assert.equal(journalLimit(undefined), 7);
 });
 
-test("the journal downloads from beside SayLLM's own path", () => {
-  assert.equal(exportPath("/apps/llmplayground/"), "/apps/body-double/export?format=markdown");
-  assert.equal(exportPath("/house/apps/llmplayground/index.html"), "/house/apps/body-double/export?format=markdown");
-  assert.equal(exportPath("/", "json"), "/apps/body-double/export?format=json");
-  assert.equal(exportPath(undefined, "pdf"), "/apps/body-double/export?format=markdown");
+test("the journal downloads from the kernel's proxy path for the app", () => {
+  assert.equal(EXPORT_PATH, "/apps/body-double/export?format=markdown");
   assert.equal(attachmentName('attachment; filename="body-double-2026-10-15.md"'), "body-double-2026-10-15.md");
   assert.equal(attachmentName('attachment; filename="../../x.sh"'), "body-double.md", "only a plain name");
   assert.equal(attachmentName(null), "body-double.md");
@@ -528,45 +563,43 @@ test("Today shows the time and what was said, newest last, fitted to the card", 
   assert.equal(more.sub, "60 entries", "the ones day left out count");
 });
 
-/** Runs `run` with fetch, location and object URLs stood in for. */
-async function withDownload(response, run) {
-  const saved = { fetch: globalThis.fetch, location: globalThis.location, create: URL.createObjectURL, revoke: URL.revokeObjectURL };
-  const fetched = [];
-  globalThis.fetch = async (url, options) => {
-    fetched.push([url, options]);
-    if (response instanceof Error) throw response;
-    return response;
-  };
-  Object.defineProperty(globalThis, "location", { value: { pathname: "/apps/llmplayground/" }, configurable: true, writable: true });
+/** Runs `run` with object URLs stood in for. */
+async function withObjectUrls(run) {
+  const saved = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
   URL.createObjectURL = () => "blob:journal";
   URL.revokeObjectURL = () => {};
-  try { await run(fetched); } finally {
-    globalThis.fetch = saved.fetch;
-    Object.defineProperty(globalThis, "location", { value: saved.location, configurable: true, writable: true });
+  try { await run(); } finally {
     URL.createObjectURL = saved.create;
     URL.revokeObjectURL = saved.revoke;
   }
 }
 
-test("Today: Export downloads the journal from the app's route, not a tool", async () => {
-  const { registry, dom } = setup();
-  const ctx = fakeCtx({ span: [4, 4] });
+const answer = (status, type, extra = {}) => ({
+  ok: status >= 200 && status < 300, status, redirected: false,
+  headers: { get: (name) => ({ "content-type": type, ...extra.headers })[name] ?? null },
+  json: async () => extra.json ?? JSON.parse("not json"),
+  blob: async () => extra.blob ?? "",
+  ...extra.fields,
+});
+
+const JOURNAL = answer(200, "text/markdown; charset=utf-8", {
+  headers: { "content-disposition": 'attachment; filename="body-double-2026-10-15.md"' },
+  blob: "# Body double journal",
+});
+
+test("Today: Export downloads the journal through SayLLM's locked fetch, not a tool", async () => {
+  const { registry, dom, asked } = setup();
+  const ctx = fakeCtx({ span: [4, 4], fetched: JOURNAL });
   const body = show(registry, dom, "bd-journal", DAY, ctx);
   const [exporter] = ctx.head;
   assert.match(text(exporter), /Export/);
-  const file = {
-    ok: true, status: 200,
-    headers: { get: (name) => (name === "content-disposition" ? 'attachment; filename="body-double-2026-10-15.md"' : null) },
-    blob: async () => "# Body double journal",
-  };
   downloads.length = 0;
-  await withDownload(file, async (fetched) => {
+  await withObjectUrls(async () => {
     click(exporter);
     await settle();
-    assert.deepEqual(fetched.map(([url]) => url), ["/apps/body-double/export?format=markdown"]);
-    assert.equal(fetched[0][1].credentials, "same-origin");
-    assert.equal(fetched[0][1].headers.accept, "text/markdown", "so a sign-in gate answers 401, not its login page");
   });
+  assert.deepEqual(ctx.fetches, [["/apps/body-double/export?format=markdown", { headers: { accept: "text/markdown" } }]]);
+  assert.deepEqual(asked, ["text/markdown"], "checked by SayLLM's rules before the body is read");
   assert.deepEqual(downloads, [{ href: "blob:journal", download: "body-double-2026-10-15.md", inPage: true }]);
   assert.equal(find(body, (node) => node.tag === "a"), null, "the link is gone once used");
   assert.equal(ctx.calls.length, 0, "no tool call: the journal never enters a chat turn");
@@ -575,49 +608,63 @@ test("Today: Export downloads the journal from the app's route, not a tool", asy
 });
 
 test("Today: a refused export says why on the card", async () => {
-  const { registry, dom } = setup();
-  const ctx = fakeCtx({ span: [4, 4] });
+  const { registry, dom, asked } = setup();
+  const refused = answer(403, "application/json", { json: { error: "identity lacks 'read'" } });
+  let next = refused;
+  const ctx = fakeCtx({ span: [4, 4], fetched: () => next });
   show(registry, dom, "bd-journal", DAY, ctx);
-  const refused = { ok: false, status: 403, json: async () => ({ error: "identity lacks 'read'" }), headers: { get: () => null } };
-  await withDownload(refused, async () => {
-    click(ctx.head[0]);
-    await settle();
-  });
+  click(ctx.head[0]);
+  await settle();
   assert.deepEqual(ctx.notes, ["Could not export: identity lacks 'read'"]);
-  await withDownload(new Error("network down"), async () => {
-    click(ctx.head[0]);
-    await settle();
-  });
+  assert.deepEqual(asked, ["application/json"], "a refusal is read as JSON");
+  assert.deepEqual(ctx.reports, [], "a refusal is not a lost session");
+  next = new Error("network down");
+  click(ctx.head[0]);
+  await settle();
   assert.equal(ctx.notes.at(-1), "Could not export: network down");
+  // The lock: SayLLM refuses to send once the session is known to be gone.
+  next = Object.assign(new Error("Greenhouse is locked until the notice above is resolved. Nothing was sent."), { interactionLocked: true });
+  click(ctx.head[0]);
+  await settle();
+  assert.equal(ctx.notes.at(-1), "Could not export: Greenhouse is locked until the notice above is resolved. Nothing was sent.");
+  assert.equal(ctx.head[0].disabled, false);
 });
 
-test("Today: an expired sign-in is never saved as the journal", async () => {
-  const { registry, dom } = setup();
-  const ctx = fakeCtx({ span: [4, 4] });
-  show(registry, dom, "bd-journal", DAY, ctx);
-  const signedOut = "Could not export: your sign-in has expired. Reload the page to sign in again.";
-  const loginPage = {
-    ok: true, status: 200, redirected: true,
-    headers: { get: (name) => (name === "content-type" ? "text/html" : null) },
-    blob: async () => "<html>Sign in</html>",
-  };
-  const noAttachment = { ...loginPage, redirected: false };
-  const unauthorized = { ok: false, status: 401, json: async () => { throw new Error("not JSON"); }, headers: { get: () => null } };
-  for (const answer of [loginPage, noAttachment, unauthorized]) {
+test("Today: a lost session goes to SayLLM's own sign-in notice and nothing is saved", async () => {
+  const loginPage = answer(200, "text/html; charset=utf-8", { blob: "<html>Sign in</html>", fields: { redirected: true } });
+  const unauthorized = answer(401, "text/plain");
+  const wrongType = answer(200, "text/html");
+  for (const [response, lost] of [[loginPage, true], [unauthorized, true], [wrongType, false]]) {
+    const { registry, dom } = setup();
+    const ctx = fakeCtx({ span: [4, 4], fetched: response });
+    show(registry, dom, "bd-journal", DAY, ctx);
     downloads.length = 0;
-    await withDownload(answer, async () => {
+    await withObjectUrls(async () => {
       click(ctx.head[0]);
       await settle();
     });
     assert.deepEqual(downloads, [], "nothing saved");
-    assert.equal(ctx.notes.at(-1), signedOut);
+    assert.equal(ctx.reports.length, 1, "reported to SayLLM");
+    assert.equal(ctx.reports[0].authExpired === true, lost);
+    assert.match(ctx.notes.at(-1), /^Could not export: /);
     assert.equal(ctx.head[0].disabled, false);
   }
 });
 
+test("Today: without SayLLM's locked fetch there is no Export", () => {
+  const { registry, dom } = setup();
+  const ctx = fakeCtx({ span: [4, 4] });
+  show(registry, dom, "bd-journal", DAY, ctx);
+  assert.deepEqual(ctx.head, [], "no fetch of its own as a fallback");
+  const bare = setup({ withAssert: false });
+  const other = fakeCtx({ span: [4, 4], fetched: JOURNAL });
+  show(bare.registry, bare.dom, "bd-journal", DAY, other);
+  assert.deepEqual(other.head, [], "nor without SayLLM's response check");
+});
+
 test("Today: Export is a word, not the chevron of a link to more", () => {
   const { registry, dom } = setup();
-  const ctx = fakeCtx({ span: [3, 2] });
+  const ctx = fakeCtx({ span: [3, 2], fetched: JOURNAL });
   show(registry, dom, "bd-journal", DAY, ctx);
   const [exporter] = ctx.head;
   // SayLLM hides the label of a .more button on a narrow card and draws "›".
@@ -717,6 +764,7 @@ test("the module builds nodes only, and imports nothing", async () => {
   assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML/);
   assert.doesNotMatch(source, /^import /m, "widgets.js hands it its helpers");
   assert.doesNotMatch(source, /\bdocument\./, "the DOM comes through el, button and input");
+  assert.doesNotMatch(source, /\bfetch\(/, "no request of its own: Export uses SayLLM's locked kernelFetch");
 });
 
 // ---- fitting with a count -------------------------------------------------------------------

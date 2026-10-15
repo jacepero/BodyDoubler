@@ -5,9 +5,9 @@
 # real crate; there body-double-app's `greenhouse-kernel = { path = "../kernel" }`
 # resolves to it unchanged.
 #
-# Which modules are verbatim kernel source and which are reconstructed is in
-# src/lib.rs. The dependencies are the real kernel's own (kernel/Cargo.toml,
-# main, 2026-10-08), limited to what these five modules use.
+# The five modules are verbatim copies of the real kernel's (src/lib.rs). The
+# dependencies are the real kernel's own (kernel/Cargo.toml, main, d176a23),
+# limited to what these five modules use.
 [package]
 name = "greenhouse-kernel"
 version = "0.1.0"

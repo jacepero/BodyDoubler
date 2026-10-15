@@ -3,8 +3,10 @@
 // are on and for how long, a box to say what you are doing, today's journal,
 // the loose ends you mentioned, and how often it checks on you. Every control
 // is one call to one of the app's tools, as the person, with no model in the
-// path; Export downloads the journal from the app's own route, through the
-// kernel's /apps/ proxy, so it never goes into a chat turn.
+// path. Export downloads the journal from the app's own route, through the
+// kernel's /apps/ proxy, so it never goes into a chat turn. It uses SayLLM's
+// locked fetch and response check (ctx.kernelFetch, assertProtectedResponse),
+// as SayLLM's own export does: this module issues no request of its own.
 //
 // widgets.js calls registerBodyDoubleWidgets() at its end and hands over its
 // own helpers. This module imports nothing: headButton is private to
@@ -109,13 +111,8 @@ export function journalRows(day, limit = Infinity) {
   return { rows, earlier: total - rows.length, total, truncated };
 }
 
-/** Where the journal downloads: beside SayLLM's own path, under the kernel's /apps/ proxy. */
-export function exportPath(pathname, format = "markdown") {
-  const path = String(pathname || "");
-  const at = path.indexOf("/apps/");
-  const base = at >= 0 ? path.slice(0, at) : "";
-  return `${base}/apps/${APP}/export?format=${format === "json" ? "json" : "markdown"}`;
-}
+/** The journal download, a kernel path: the proxy hands `/export` to the app. */
+export const EXPORT_PATH = `/apps/${APP}/export?format=markdown`;
 
 /** The file name a content-disposition header gives, if it is a plain one. */
 export function attachmentName(header, fallback = "body-double.md") {
@@ -251,39 +248,23 @@ async function act(ctx, what, name, args, controls = [], done = () => {}) {
   return true;
 }
 
-const SIGNED_OUT = "Could not export: your sign-in has expired. Reload the page to sign in again.";
-
 /**
- * Downloads the journal as Markdown. Fetched first, so a refusal is a note on
- * the card rather than a page of JSON; then saved through a link on the card.
- * Only the app's own file is saved: an expired sign-in can answer 200 with
- * the login page (after a redirect), and that is not a journal.
+ * Downloads the journal as Markdown, the way SayLLM's own export does: through
+ * the app's locked fetch, so a session known to be gone sends nothing, and
+ * through its response check, so a login page answered as 200 is a lost
+ * session, never a saved file. A lost session goes to ctx.report, which
+ * raises SayLLM's own sign-in notice. A refusal (no `read`, the app down) is a
+ * note on the card. The file is saved through a link on the card.
  */
-async function downloadJournal(ctx, body, el, control) {
+async function downloadJournal(ctx, body, el, control, assertProtectedResponse) {
   control.disabled = true;
   try {
-    const response = await fetch(exportPath(globalThis.location?.pathname), {
-      credentials: "same-origin",
-      // Not a page: the sign-in gate answers 401 rather than its login page.
-      headers: { accept: "text/markdown" },
-    });
-    if (response.status === 401) {
-      ctx.note(SIGNED_OUT);
-      return;
-    }
+    const response = await ctx.kernelFetch(EXPORT_PATH, { headers: { accept: "text/markdown" } });
+    // A refusal answers JSON; the file is Markdown.
+    assertProtectedResponse(response, response.ok ? "text/markdown" : "application/json");
     if (!response.ok) {
-      let reason = `HTTP ${response.status}`;
-      try {
-        const answer = await response.json();
-        if (answer?.error) reason = String(answer.error);
-      } catch {
-        // Not JSON: the status says it.
-      }
-      ctx.note(`Could not export: ${reason}`);
-      return;
-    }
-    if (response.redirected || !/^attachment\b/i.test(response.headers.get("content-disposition") || "")) {
-      ctx.note(SIGNED_OUT);
+      const answer = await response.json().catch(() => null);
+      ctx.note(`Could not export: ${answer?.error || `HTTP ${response.status}`}`);
       return;
     }
     const url = URL.createObjectURL(await response.blob());
@@ -363,7 +344,9 @@ export function fitWithCount(list, line, { base = 0, label, dropFirst = false })
  * Registers the Body double cards with widgets.js's own helpers:
  * { registerWidget, el, button, input, icon, headButton }.
  */
-export function registerBodyDoubleWidgets({ registerWidget, el, button, input, icon, headButton }) {
+export function registerBodyDoubleWidgets({
+  registerWidget, el, button, input, icon, headButton, assertProtectedResponse,
+}) {
   function row(className, ...children) {
     const node = el("div", className);
     node.append(...children.filter(Boolean));
@@ -529,10 +512,15 @@ export function registerBodyDoubleWidgets({ registerWidget, el, button, input, i
     render(day, body, ctx) {
       remember(body, ctx);
       // The whole journal, as a file: from the app's download route, never a
-      // tool, so it stays out of the chat model's context.
-      const exporter = headButton("Export", "", () => void downloadJournal(ctx, body, el, exporter), "ghost");
-      exporter.title = "Download the whole journal as Markdown";
-      ctx.actions(exporter);
+      // tool, so it stays out of the chat model's context. Only where SayLLM
+      // hands over its locked fetch and response check.
+      if (typeof ctx.kernelFetch === "function" && typeof assertProtectedResponse === "function") {
+        const exporter = headButton("Export", "", () => void downloadJournal(ctx, body, el, exporter, assertProtectedResponse), "ghost");
+        exporter.title = "Download the whole journal as Markdown";
+        ctx.actions(exporter);
+      } else {
+        ctx.actions();
+      }
       const { rows, earlier, total } = journalRows(day, journalLimit(ctx.span));
       ctx.subtitle(total ? `${total} ${total === 1 ? "entry" : "entries"}` : "");
       if (!rows.length) {

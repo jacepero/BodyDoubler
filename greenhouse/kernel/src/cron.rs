@@ -38,23 +38,23 @@ fn parse_field(
         if step < 1 {
             return Err(format!("bad cron step in '{field}'"));
         }
-        let num = |s: &str| {
-            s.parse::<u32>()
-                .map_err(|_| format!("bad cron value '{s}' in '{field}'"))
-        };
         let (lo, hi) = if range == "*" {
             (min, max)
         } else if let Some((a, b)) = range.split_once('-') {
-            (num(a)?, num(b)?)
+            let lo = a.parse().map_err(|_| format!("bad cron field '{field}'"))?;
+            let hi = b.parse().map_err(|_| format!("bad cron field '{field}'"))?;
+            (lo, hi)
         } else {
-            let n = num(range)?;
+            let lo: u32 = range
+                .parse()
+                .map_err(|_| format!("bad cron field '{field}'"))?;
+            // 'a/n' runs a..=max (vixie); bare 'a' is just a.
             (
-                n,
-                // Stand-in, lines 41-63 not captured: N/S runs to the field's end.
+                lo,
                 if step > 1 || part.contains('/') {
                     max
                 } else {
-                    n
+                    lo
                 },
             )
         };
@@ -108,50 +108,45 @@ pub fn cron_matches<T: Timelike + Datelike>(c: &Cron, t: &T) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
 
-    // Stand-in: the kernel's tests were captured only in part. `at`, `steps`
-    // and `range_with_step` are reconstructed from their names and call
-    // sites; `huge_steps_select_only_the_start` is verbatim (PR #29).
-
-    /// A minute in August 2026 (the 22nd is a Saturday, the 24th a Monday).
-    fn at(day: u32, hour: u32, minute: u32) -> chrono::NaiveDateTime {
-        chrono::NaiveDate::from_ymd_opt(2026, 8, day)
+    fn at(day: u32, h: u32, m: u32) -> chrono::NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 8, day)
             .unwrap()
-            .and_hms_opt(hour, minute, 0)
+            .and_hms_opt(h, m, 0)
             .unwrap()
     }
 
     #[test]
-    fn every_minute() {
-        let c = parse_cron("* * * * *").unwrap();
-        for minute in 0..60 {
-            assert!(cron_matches(&c, &at(22, 13, minute)));
-        }
+    fn hourly() {
+        let c = parse_cron("0 * * * *").unwrap();
+        assert!(cron_matches(&c, &at(22, 5, 0)));
+        assert!(!cron_matches(&c, &at(22, 5, 1)));
+    }
+
+    #[test]
+    fn daily_at_4() {
+        let c = parse_cron("0 4 * * *").unwrap();
+        assert!(cron_matches(&c, &at(22, 4, 0)));
+        assert!(!cron_matches(&c, &at(22, 5, 0)));
+        assert!(!cron_matches(&c, &at(22, 4, 30)));
     }
 
     #[test]
     fn steps() {
-        let c = parse_cron("*/10 * * * *").unwrap();
-        for minute in 0..60 {
-            assert_eq!(cron_matches(&c, &at(22, 0, minute)), minute % 10 == 0);
+        let c = parse_cron("*/15 * * * *").unwrap();
+        for m in [0, 15, 30, 45] {
+            assert!(cron_matches(&c, &at(22, 1, m)));
         }
-        let c = parse_cron("5/20 * * * *").unwrap();
-        for minute in 0..60 {
-            assert_eq!(
-                cron_matches(&c, &at(22, 0, minute)),
-                [5, 25, 45].contains(&minute)
-            );
-        }
+        assert!(!cron_matches(&c, &at(22, 1, 20)));
     }
 
     #[test]
     fn range_with_step() {
-        let c = parse_cron("10-30/10 22 * * *").unwrap();
-        assert!(cron_matches(&c, &at(22, 22, 10)));
-        assert!(cron_matches(&c, &at(22, 22, 20)));
-        assert!(cron_matches(&c, &at(22, 22, 30)));
-        assert!(!cron_matches(&c, &at(22, 22, 40)));
-        assert!(!cron_matches(&c, &at(22, 21, 10)));
+        let c = parse_cron("10-40/10 * * * *").unwrap();
+        for m in [10, 20, 30, 40] {
+            assert!(cron_matches(&c, &at(22, 0, m)));
+        }
         assert!(!cron_matches(&c, &at(22, 0, 50)));
     }
 
@@ -168,46 +163,39 @@ mod tests {
     #[test]
     fn dow_monday() {
         // 2026-08-24 is a Monday, 2026-08-22 a Saturday.
-        let c = parse_cron("0 9 * * 1").unwrap();
-        assert!(cron_matches(&c, &at(24, 9, 0)));
-        assert!(!cron_matches(&c, &at(22, 9, 0)));
-        // 7 is Sunday, as 0 is.
-        let sunday = parse_cron("0 9 * * 7").unwrap();
-        assert!(cron_matches(&sunday, &at(23, 9, 0)));
+        let c = parse_cron("30 2 * * 1").unwrap();
+        assert!(cron_matches(&c, &at(24, 2, 30)));
+        assert!(!cron_matches(&c, &at(22, 2, 30)));
     }
 
     #[test]
-    fn a_fixed_time_of_day() {
-        let c = parse_cron("30 3 * * *").unwrap();
-        assert!(cron_matches(&c, &at(22, 3, 30)));
-        assert!(cron_matches(&c, &at(24, 3, 30)));
-        assert!(!cron_matches(&c, &at(22, 3, 31)));
-        assert!(!cron_matches(&c, &at(22, 15, 30)));
+    fn dow_seven_is_sunday() {
+        let c = parse_cron("0 0 * * 7").unwrap();
+        assert!(cron_matches(&c, &at(23, 0, 0))); // 2026-08-23 is a Sunday
     }
 
     #[test]
-    fn dom_or_dow_when_both_are_restricted() {
-        // The 1st of the month or any Monday.
+    fn vixie_or() {
         let c = parse_cron("0 0 1 * 1").unwrap();
-        assert!(cron_matches(&c, &at(1, 0, 0)));
-        assert!(cron_matches(&c, &at(24, 0, 0)));
-        assert!(!cron_matches(&c, &at(22, 0, 0)));
+        assert!(cron_matches(&c, &at(24, 0, 0))); // Monday, not the 1st
+        let first = NaiveDate::from_ymd_opt(2026, 9, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        assert!(cron_matches(&c, &first)); // the 1st, a Tuesday
+        assert!(!cron_matches(&c, &at(22, 0, 0))); // Saturday the 22nd
     }
 
     #[test]
-    fn bad_expressions_are_refused() {
-        assert!(parse_cron("99 * * * *")
-            .unwrap_err()
-            .contains("out of range"));
-        assert!(parse_cron("* 24 * * *").is_err());
-        assert!(parse_cron("* * 0 * *").is_err());
-        assert!(parse_cron("* * * 13 *").is_err());
-        assert!(parse_cron("* * * * 8").is_err());
-        assert!(parse_cron("30-10 * * * *").is_err());
-        assert!(parse_cron("*/0 * * * *").unwrap_err().contains("step"));
-        assert!(parse_cron("x * * * *").is_err());
-        assert!(parse_cron("@daily").unwrap_err().contains("5 fields"));
-        assert!(parse_cron("* * * *").is_err());
-        assert!(parse_cron("* * * * * *").is_err());
+    fn rejects_malformed() {
+        for bad in [
+            "61 * * * *",
+            "* * * *",
+            "a * * * *",
+            "*/0 * * * *",
+            "5-2 * * * *",
+        ] {
+            assert!(parse_cron(bad).is_err(), "{bad} should fail");
+        }
     }
 }

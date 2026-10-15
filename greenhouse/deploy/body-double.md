@@ -118,12 +118,18 @@ that would put entries in someone's journal or raise a real check-in.
 4. After the owner's steps, one read through the kernel, exactly as chat would dispatch it (grant
    check, identity, app). `now` changes nothing:
 
+   The proxy credential reaches curl through a file descriptor, never as an argument, as
+   `deploy/verify.sh` does: any local user can read a process's arguments in `/proc`, and this
+   credential lets its holder act as anyone. `printf` is a shell builtin, so the value is on no
+   process's command line. Run it in bash:
+
    ```bash
-   CRED=$(cat /etc/greenhouse/kernel/proxy.credential)
-   curl -s -m 30 -H "x-greenhouse-proxy-credential: $CRED" -H "x-greenhouse-authenticated-user: owner" \
+   unset CRED; CRED=$(tr -d '\r\n' < /etc/greenhouse/kernel/proxy.credential)
+   curl -s -m 30 -H @<(printf 'x-greenhouse-proxy-credential: %s\nx-greenhouse-authenticated-user: owner\n' "$CRED") \
        -H 'content-type: application/json' -d '{"args":{}}' \
        http://127.0.0.1:4000/api/tools/body-double.now/call \
      | python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get("result") or {}; print(d.get("ok"), d.get("error") or (r.get("now"), r.get("timezone"), r.get("checkins")))'
+   unset CRED
    ```
 
    `True`, the owner's local time and zone, and the check-in settings. Before the approval the

@@ -35,20 +35,43 @@ node --test llmplayground/tests/*.test.js      # the SayLLM widgets
 ```
 
 Greenhouse apps use the kernel crate as their SDK (`greenhouse-kernel = { path = "../kernel" }`):
-the identity verifier, the error type, the manifest validator and the clock. The Greenhouse
-repository could not be cloned into this session. So `kernel/` here reconstructs exactly that
-slice from the owner's own sessions in that repository:
+the identity verifier, the error type, the manifest validator, the cron parser and the clock.
+`kernel/` here holds exactly those five files, copied verbatim from `jacepero/greenhouse` main at
+`d176a23`, so the app builds in this folder. In Greenhouse the same path dependency resolves to the
+real kernel crate.
 
-- `clock.rs` and `error.rs` are verbatim;
-- `identity.rs` is verbatim through the verifier, and some of its tests are reconstructed;
-- `cron.rs` is verbatim apart from a reconstructed part of one function;
-- `validate.rs` is partly rebuilt: the types and half the parsing are verbatim, and the rest
-  follows the captured rules and error texts.
+## Checked against the real Greenhouse
 
-`kernel/src/lib.rs` says which is which, with dates.
+On 2026-10-15, with `jacepero/greenhouse` main at `d176a23` cloned read-only, in a scratch copy of
+that workspace (nothing in the Greenhouse repository was changed):
 
-In Greenhouse the same path dependency resolves to the real kernel crate, which is the build that
-counts. Run the checks above in the real workspace before anything is deployed.
+- **Build and tests:** `body-double-app` added as a workspace member, with
+  `deploy/body-double/` beside it (a config test reads the shipped example). With the real kernel
+  crate, `cargo test -p body-double-app` gives 36 unit and 21 integration tests passing.
+  `cargo clippy -p body-double-app --all-targets --no-deps -- -D warnings` is clean, with
+  rustc 1.97.0. The manifest test runs the real `validate_manifest`.
+- **Lock:** `Cargo.lock` gains only the `body-double-app` entry. No existing entry changes and no
+  new crate appears.
+- **Contract, read in the real source:**
+  - manifest rules, registration and identity verification;
+  - the scheduler's call (body `{}`, `system:scheduler`, `command`);
+  - tool dispatch (wire names, the description prefix, results passed whole, the audit's
+    arguments);
+  - `/api/notify` and `/api/notify/retire`, and the proxy (path stripping, data-plane
+    identity, relayed `content-disposition`).
+
+  All match what the app does.
+- **Deploy and appliance:** every `greenhousectl` and `greenhouse-admin` command and flag in the
+  runbook exists as written. Every Before text in `appliance/INTEGRATION.md` occurs once in the
+  real files. With the edits applied: `nft -c` accepts the egress file, and systemd-sysusers and
+  systemd-tmpfiles create the user and the directory.
+- **SayLLM:** every Before text in `llmplayground/INTEGRATION.md` occurs once in the real files.
+  With the patch applied, SayLLM's own suite gains the module's tests and fails nothing it did not
+  fail before. It ran with stand-ins for `express` and `better-sqlite3`, since no packages could
+  be installed. The Body double page rendered in Chromium from the real `home.js`, `widgets.js`
+  and `styles.css`, under SayLLM's own content security policy.
+
+What the comparison found wrong was fixed in this folder. The deploy and SayLLM notes say where.
 
 ## Into `jacepero/greenhouse`
 
@@ -93,9 +116,9 @@ greenhouse/docs/design/body-double-proposal.md there first.
    Commit the updated Cargo.lock; builds after that use --locked.
 4. Run cargo test -p body-double-app, then
    cargo clippy -p body-double-app --all-targets --no-deps -- -D warnings, then
-   rustfmt --edition 2021 --check on the crate's files. The crate was built against a
-   reconstruction of kernel/src/{error,identity,validate,cron,clock}.rs. Fix only real API
-   differences in body-double-app, and report each one.
+   rustfmt --edition 2021 --check on the crate's files. They passed read-only against main at
+   d176a23 (greenhouse/README.md, "Checked against the real Greenhouse"). If anything fails on
+   the current main, fix only real API differences in body-double-app, and report each one.
 5. Apply llmplayground/INTEGRATION.md to SayLLM (the new module, its test, and the listed
    edits). Run SayLLM's own tests.
 6. Make no other appliance/ edit yet. Report appliance/INTEGRATION.md's remaining edits as
@@ -103,7 +126,7 @@ greenhouse/docs/design/body-double-proposal.md there first.
 7. Commit, without deploying. Do not register, approve or grant anything, and do not touch
    production. The proposal's decisions are the owner's.
 
-Report the exact SHA, the test results and every difference from the reconstruction.
+Report the exact SHA, the test results and every difference from what README.md records.
 If anything in these instructions does not reconcile with the repository state you observe,
 the available tooling, the filesystem, or what you are actually able to do, stop immediately
 and request guidance before making further changes. Do not infer, improvise, or silently

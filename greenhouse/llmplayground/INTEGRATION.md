@@ -11,14 +11,14 @@ default" means for someone new.
 | File here | What to do with it |
 |---|---|
 | `public/body-double-widgets.js` | New. Copy to `llmplayground/public/`. The four cards and their pure helpers. It imports nothing. |
-| `tests/body-double-widgets.test.js` | New. Copy to `llmplayground/tests/`. 29 `node:test` tests; no DOM needed. |
+| `tests/body-double-widgets.test.js` | New. Copy to `llmplayground/tests/`. 35 `node:test` tests; no DOM needed. |
 | `public/body-double.css` | **Do not copy.** A reference copy of the rules that go into `styles.css` (step 6). It is not in `STATIC_ASSETS`, so it would never be served. |
 | `INTEGRATION.md` | This file. |
 
-The edits below change six existing SayLLM files. Each "Before" is quoted from SayLLM as last seen in
-the owner's sessions (main checkout, 2026-10-13 to 2026-10-14; timestamps with each step). Those files
-may have moved since then. Check each "Before" still matches once, then replace it with its "After".
-The anchors were applied and tested against the reconstructed files (see "Checked so far" at the end).
+The edits below change six existing SayLLM files. Each "Before" is quoted from `jacepero/greenhouse`
+main at `d176a23` (2026-10-14) and occurs there exactly once. If the files have moved since, check
+each "Before" still matches once, then replace it with its "After". "Checked so far" at the end says
+what was run with them applied.
 
 ## The cards
 
@@ -45,16 +45,22 @@ outside a tap may not bring the keyboard back. A box is cleared as soon as its w
 anything typed while the call is out stays. A failed write puts the words back, unless something
 new was typed, and says why in the card's note line.
 
-Export fetches the file first, so a refusal (no `read`, the app down) is a note on the card, not a
-page of JSON. It asks for `text/markdown`, so an expired sign-in answers 401 rather than its login
-page. It saves only an answer that carries the app's `content-disposition: attachment` and came
-without a redirect. Anything else, such as a login page after a redirect, gets "your sign-in has
-expired. Reload the page" and nothing is saved. The button is a plain word ("Export", class
-`ghost`), not a `more` link: SayLLM shows a `more` button on a narrow card as a bare "›". It then saves the file through a link on the card, under the name the app's
-`content-disposition` gives. The path sits beside SayLLM's own (`…/apps/llmplayground/` becomes
-`…/apps/body-double/export`), so it is same-origin, and SayLLM's `connect-src 'self'` allows it.
-The journal never passes through a tool, so it stays out of the chat model's context and the
-kernel's tool audit.
+Export works the way SayLLM's own conversation export does (`export-ui.js`). The module sends no
+request of its own. It uses:
+- **SayLLM's locked kernel fetch:** `kernelFetch`, from `app.js`, which `home.js` puts on each
+  card's ctx. Once the session is known to be gone, nothing is sent. The path is
+  `/apps/body-double/export?format=markdown`, reached through the kernel's proxy.
+- **SayLLM's response check:** `assertProtectedResponse`, from `auth.js`, which `widgets.js` hands
+  to the module. A 401, or a login page after a redirect, is an `AuthExpiredError`. That goes to
+  `ctx.report`, which raises SayLLM's own sign-in notice, and nothing is saved.
+
+A refusal (no `read`, the app down) is a note on the card. A good answer is saved through a link on
+the card, under the name the app's `content-disposition` gives. The journal never passes through a
+tool, so it stays out of the chat model's context and the kernel's tool audit. Without `kernelFetch`
+and `assertProtectedResponse` the card shows no Export at all, rather than fetch on its own.
+
+The button is a plain word ("Export", class `ghost`), not a `more` link: on a narrow card SayLLM
+shows a `more` button as a bare "›".
 
 Today and Loose ends never lose a row without a word. When a card is short, Today hides its oldest
 lines first, so the line just said always shows, and its "N earlier" line counts them. Loose ends
@@ -66,7 +72,7 @@ The cards are registered from the end of `widgets.js`, which hands over its own 
 `headButton` is private to `widgets.js`, and importing `widgets.js` from the new module would be an
 import cycle that reaches its bindings before they are initialized.
 
-Imports (widgets.js header, widgets_spans.py 2026-10-14T00:07:06Z; reports2/home-widgets-ui.md §3.2).
+Imports, at the top of the file. `assertProtectedResponse` is for Export (above).
 
 **Before**
 
@@ -84,13 +90,13 @@ import { button, el, input } from "./dom.js";
 import { icon } from "./icons.js";
 import { attentionItems } from "./attention.js";
 import { drawScene, sceneSpec } from "./scene.js";
+import { assertProtectedResponse } from "./auth.js";
 import { registerBodyDoubleWidgets } from "./body-double-widgets.js";
 ```
 
-The end of the file: the last widget registered, `bookmark` (reconstructed final after
-activity_widget.py 2026-10-14T03:33:46Z). If something was registered after it since, put the call
-after that instead. It must stay at the very end: `registry` is a `const`, and the call needs it
-initialized.
+The end of the file, after the last widget registered (`bookmark`). If something was registered
+after it since, put the call after that instead. It must stay at the very end: `registry` is a
+`const`, and the call needs it initialized.
 
 **Before**
 
@@ -113,12 +119,12 @@ initialized.
 
 // The Body double app's cards (body-double-widgets.js). They get this file's
 // helpers rather than importing it, since this file imports them.
-registerBodyDoubleWidgets({ registerWidget, el, button, input, icon, headButton });
+registerBodyDoubleWidgets({ registerWidget, el, button, input, icon, headButton, assertProtectedResponse });
 ```
 
 Optional, for the owner's Activity card: the app's `checkins.tick` schedule then reads
-"Body double: checkins.tick" rather than "body-double: checkins.tick" (widgets.js, activity
-section, 2026-10-14T03:32:46Z).
+"Body double: checkins.tick" rather than "body-double: checkins.tick" (`APP_NAMES`, in the activity
+section).
 
 **Before**
 
@@ -137,8 +143,7 @@ section, 2026-10-14T03:32:46Z).
 
 ## 2. `public/apps.js`
 
-A rail entry, after Timers (APPS as of the Read 2026-10-13T22:44:51Z and panel_pages.py
-2026-10-14T02:29:56Z). There is no `pages.js` entry, so `home.js` `renderPage` puts the four cards
+A rail entry, after Timers. There is no `pages.js` entry, so `home.js` `renderPage` puts the four cards
 in `div.board.app-page`. The later `.app-page` rule (`display: flex; flex-direction: column`)
 overrides `.board`'s grid, so the cards stack full width at their natural height: Focus, Today,
 Loose ends, Check-ins. Their `legacy.large` spans set only `ctx.span`, which Today's line count
@@ -163,8 +168,8 @@ The rail id passes `/api/settings/apps` (`/^[a-z][a-z0-9-]{0,39}$/`), and `tests
 
 ## 3. `public/home.js`
 
-The Add widgets drawer groups widgets by app. Without these, the cards land under "Other"
-(GROUPS as of the Write 2026-10-14T00:11:30Z; reports2/home-widgets-ui.md §3.7).
+Three places. First, the Add widgets drawer groups widgets by app (`GROUPS`). Without these, the
+cards land under "Other".
 
 **Before**
 
@@ -184,10 +189,59 @@ The Add widgets drawer groups widgets by app. Without these, the cards land unde
 };
 ```
 
+Second and third, for Export: Home takes `app.js`'s locked `kernelFetch` and puts it on each card's
+ctx, beside `kernelJson` and `appJson`. A card then has the same guarded, non-JSON fetch SayLLM's own
+export uses. The card ctx is the one with `config` (`card()`); the page ctx of `renderAppPage`
+does not need it.
+
+**Before**
+
+```js
+ * callTool(qualified, args) → the tool's result; kernelJson(path, options);
+ * appJson(path, options) for SayLLM's own data; loadLayout(form) → { widgets,
+```
+
+**After**
+
+```js
+ * callTool(qualified, args) → the tool's result; kernelJson(path, options);
+ * kernelFetch(path, options) → the Response, for a card that downloads a file;
+ * appJson(path, options) for SayLLM's own data; loadLayout(form) → { widgets,
+```
+
+**Before**
+
+```js
+  callTool, kernelJson, appJson, loadLayout, saveLayout, report,
+```
+
+**After**
+
+```js
+  callTool, kernelJson, kernelFetch, appJson, loadLayout, saveLayout, report,
+```
+
+**Before**
+
+```js
+      config,
+      callTool: cachedTool,
+      kernelJson,
+```
+
+**After**
+
+```js
+      config,
+      callTool: cachedTool,
+      kernelJson,
+      kernelFetch,
+```
+
 ## 4. `public/app.js`
 
-SayLLM shows the owner's notices as pinned cards, for an allowlist of categories (main `app.js`, Read
-2026-10-13T23:09:08Z and `sed` 2026-10-14T00:49:42Z). The app raises `body-double-checkin` only for
+Two places. First, SayLLM shows the owner's notices as pinned cards, for an allowlist of
+categories. The app raises `body-double-checkin` only for
 the owner (its `notices_for`), and SayLLM polls notices only for the owner, so the two agree.
 A check-in's card reads "Check-in" / "Still on your current task? 45m in." and, with loose ends
 open, "1 loose end open." It carries none of the person's words: no task title, no note, no mood.
@@ -219,11 +273,31 @@ const SHOWN_NOTIFICATION_CATEGORIES = ["weather-warning", "home-alert", "node-al
 const SHOWN_NOTIFICATION_CATEGORIES = ["weather-warning", "home-alert", "node-alert", "node-down", "body-double-checkin"];
 ```
 
+Second, Home gets the locked `kernelFetch` (step 3). It is the wrapped one, from
+`lockedRequest(emitKernelFetch, interactionsLocked)`, so "exactly three functions call `fetch`, each
+behind the one lock" stays true.
+
+**Before**
+
+```js
+const home = createHome({
+  callTool,
+  kernelJson: kernelJsonRequest,
+```
+
+**After**
+
+```js
+const home = createHome({
+  callTool,
+  kernelJson: kernelJsonRequest,
+  kernelFetch,
+```
+
 ## 5. `src/http.js`
 
 `STATIC_ASSETS` is an allowlist; a module the front end imports but that is missing here 404s in the
-browser, and a test guards it (`STATIC_ASSETS` quoted from `sed` 2026-10-14T17:10:55Z). The anchor is
-kept short because the PDF files were added to the list later that day.
+browser, and a test guards it. The anchor is kept short; the list is one long line.
 
 **Before**
 
@@ -242,10 +316,11 @@ kept short because the PDF files were added to the list later that day.
 Two places. The rules reuse Home's classes (`.widget-row`, `.widget-row-name`, `.empty-state`,
 `.btn`, `.icon-btn`, `.sw`, `.segmented`/`.seg`, `.tp-input`, `.widget-line`, `.muted`) and tokens
 (`--violet`, `--violet-bg`, `--t2`, `--t3`, `--surface`). Each rule that adjusts one of Home's is more
-specific than it, and the phone rule is scoped under `.w`, so where each block sits in the file
-does not matter. `public/body-double.css` holds the same rules.
+specific than it: `.widget-row.bd-entry` and `.widget-line.bd-meta` against Home's single-class
+`.widget-row` and `.widget-line`, for example. The phone rule is scoped under `.w`. So where each
+block sits in the file does not matter. `public/body-double.css` holds the same rules.
 
-After the Timers page rules (styles.css, Timers page block from 2026-10-14T02:33Z).
+After the Timers page rules.
 
 **Before**
 
@@ -269,7 +344,7 @@ After the Timers page rules (styles.css, Timers page block from 2026-10-14T02:33
 .bd-task { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-task.bd-none { color: var(--t3); font-weight: 500; }
 .bd-elapsed { font-family: "Inter Display", "Inter", sans-serif; font-size: clamp(28px, 12cqi, 52px); font-weight: 300; line-height: 1.05; letter-spacing: -.02em; }
-.bd-meta { color: var(--t3); font-size: 12.5px; }
+.bd-meta, .widget-line.bd-meta { color: var(--t3); font-size: 12.5px; }
 .bd-paused { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; color: var(--t3); font-size: 12.5px; flex: none;
   max-height: 32px; overflow: hidden; }
 .bd-paused-name { color: var(--t2); }
@@ -277,7 +352,9 @@ After the Timers page rules (styles.css, Timers page block from 2026-10-14T02:33
 .bd-say input.tp-input { flex: 1; min-width: 0; height: 32px; }
 .bd-list { margin-top: 8px; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .bd-list > [hidden] { display: none; }
-.bd-entry { align-items: flex-start; }
+.widget-row.bd-entry { align-items: flex-start; }
+/* The "N earlier" line comes first in the list; hidden, the first row still gets no divider. */
+.bd-earlier[hidden] + .widget-row { border-top: 0; }
 .bd-time { flex: none; width: 42px; padding-top: 1px; color: var(--t3); font-size: 12.5px; }
 .bd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-earlier { margin: 0; padding: 4px 0; color: var(--t3); font-size: 12.5px; }
@@ -289,7 +366,7 @@ After the Timers page rules (styles.css, Timers page block from 2026-10-14T02:33
 ```
 
 Inside the single `@media (max-width: 860px)` block, at its end (`tests/product-surface.test.js`
-counts that block; quoted in reports2/home-widgets-ui.md §5.5). At 16px a phone does not zoom the page
+counts that block). At 16px a phone does not zoom the page
 when the box is tapped.
 
 **Before**
@@ -324,7 +401,7 @@ the tools.
 | Task | General conversation |
 | Personality | Neutral (the instructions below already set the tone) |
 | Default reasoning | fast. Move it up if the fast tier proves unreliable at tool calls. |
-| Memory enabled | the owner's choice. What the person types in chat forms memories as any message does. The app's tool results never do (the poisoning guard), so what the page writes stays in the app. Leave the sensitive-topics switch off: moods are emotional states. |
+| Memory enabled | the owner's choice; off keeps the journal out of memories. SayLLM never stores a tool result. But what the person types in chat is stored and can form memories, and so can the assistant's replies, which repeat what `now` and `day` return. A memory may rest on the assistant's replies alone (`memory-formation.js`), and is universal by default. Summaries of the conversation are written whatever the memory switches say. Only private turns are never read. Leave the sensitive-topics switch off: moods are emotional states. |
 | Temperature | 0.6 (the iOS app's sampler) |
 
 Custom instructions:
@@ -346,28 +423,32 @@ Asked for a recap of the day, read body-double__day and write four to six plain 
 
 ## Checked so far
 
-- `node --check public/body-double-widgets.js`; `node --test tests/body-double-widgets.test.js`:
-  34 pass (Node 22.22). Node 22 does not take a directory for `--test`; give the file, or a glob
-  such as `node --test 'tests/*.test.js'`.
-- Every "Before" above was applied, exactly once each, to the files reconstructed from the owner's
-  sessions (`widgets.js`, `apps.js`, `home.js`, `styles.css`, as of 2026-10-14) and to the verbatim
-  quotes of `app.js` and `src/http.js`. Then, in Node with stand-ins for `dom.js` and `icons.js`:
-  `widgets.js`, `apps.js` and `home.js` load; the four cards register after Home's own; Focus, Loose
-  ends and Check-ins are offered with `body-double.now`, Today with `body-double.day`, none without;
-  a new person's default Home gets Focus only (proposal decision 8), and the other three are on the page and in Add widgets;
-  `widgetSpan(widget, "large")` gives the page spans above; `availableApps` shows the rail entry only
-  with `body-double.now`; every page's widgets exist; `styles.css` still has one
-  `max-width: 860px` block, with the new rule inside it, and its braces balance.
-- Export in Chromium (Playwright): a page at `/apps/llmplayground/` with SayLLM's own
-  `content-security-policy`, the Today card, and a stand-in `/apps/body-double/export`. One click
-  saved `body-double-2026-10-15.md` with the file's content, and the page stayed where it was. A
-  403 showed "Could not export: identity lacks 'read'" on the card. Behind a stand-in for the
-  Authelia gate, with the session gone, the card said the sign-in had expired and saved nothing.
-  This held both when the gate answered 401 and when it redirected to its login page. At phone
-  widths (375 and 390 px, Home and the page) the button reads "Export".
-- Not checked: the cards in the real SayLLM. `scripts/preview.js` with
-  `scripts/preview-fixture.json` (tool answers keyed `"body-double.now {}"`, `"body-double.day {}"`)
-  would show them against the examples in `apps/body-double.md`.
+Against `jacepero/greenhouse` main at `d176a23`, in a scratch copy of its `llmplayground/` (the
+Greenhouse checkout itself was not changed):
+
+- **The Befores:** every "Before" above occurs exactly once in the real files and was replaced with
+  its "After". The `src/http.js` anchor is a fragment of one long line.
+- **SayLLM's own suite:** `node --test "tests/*.test.js"`, as `package.json` runs it, with this
+  module and its test added. Unpatched, 411 of 412 pass; patched, 446 of 447. The 35 new tests
+  pass. The one failure is the same test both times: it reads
+  `deploy/greenhouse-llmplayground.service`, which a copy of `llmplayground/` alone does not have.
+  `express` and `better-sqlite3` were small local stand-ins, since no packages could be
+  installed.
+- **Export in Chromium (Playwright):** the page was served from `/apps/llmplayground/` under
+  SayLLM's own content security policy. It used the real patched `home.js`, `widgets.js`,
+  `apps.js`, `styles.css`, `auth.js` and `ui-state.js` `lockedRequest`, as `app.js` wires them.
+  - A good answer saved `body-double-2026-10-15.md` with the app's content.
+  - A 403 put "Could not export: identity lacks 'read'" on the card and raised nothing.
+  - A redirect to a login page became SayLLM's `AuthExpiredError` through `ctx.report`, engaged
+    the lock and saved nothing. The next press sent no request, and the card said Greenhouse was
+    locked.
+- **Layout in the same page:**
+  - Today's first row has no divider while "N earlier" is hidden;
+  - rows align to the top;
+  - Check-ins lines are 12.5px;
+  - "Export" shows as a word.
+
+  Earlier, at 375 and 390 px, the button also read "Export" on Home and on the page.
 
 ## Open points
 
@@ -378,4 +459,4 @@ Asked for a recap of the day, read body-double__day and write four to six plain 
 - Check-in notices reach only the owner, in SayLLM, the next time it is open (apps/body-double.md,
   "Who sees it"). Everyone else sees a due check-in on Focus and the assistant sees it in `now`.
 - The tint (violet) and the icons are choices for the owner to confirm. `persona`, `report`, `pin`
-  and `clock` exist in `icons.js`, but how the `persona` glyph looks was not seen in the sessions.
+  and `clock` exist in `icons.js`.

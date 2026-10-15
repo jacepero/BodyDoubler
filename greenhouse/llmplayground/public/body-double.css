@@ -15,7 +15,7 @@
 .bd-task { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-task.bd-none { color: var(--t3); font-weight: 500; }
 .bd-elapsed { font-family: "Inter Display", "Inter", sans-serif; font-size: clamp(28px, 12cqi, 52px); font-weight: 300; line-height: 1.05; letter-spacing: -.02em; }
-.bd-meta { color: var(--t3); font-size: 12.5px; }
+.bd-meta, .widget-line.bd-meta { color: var(--t3); font-size: 12.5px; }
 .bd-paused { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; color: var(--t3); font-size: 12.5px; flex: none;
   max-height: 32px; overflow: hidden; }
 .bd-paused-name { color: var(--t2); }
@@ -23,7 +23,9 @@
 .bd-say input.tp-input { flex: 1; min-width: 0; height: 32px; }
 .bd-list { margin-top: 8px; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .bd-list > [hidden] { display: none; }
-.bd-entry { align-items: flex-start; }
+.widget-row.bd-entry { align-items: flex-start; }
+/* The "N earlier" line comes first in the list; hidden, the first row still gets no divider. */
+.bd-earlier[hidden] + .widget-row { border-top: 0; }
 .bd-time { flex: none; width: 42px; padding-top: 1px; color: var(--t3); font-size: 12.5px; }
 .bd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-earlier { margin: 0; padding: 4px 0; color: var(--t3); font-size: 12.5px; }

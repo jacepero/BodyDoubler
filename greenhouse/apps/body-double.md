@@ -275,9 +275,10 @@ retires it. The text is a template, with no model involved and none of the perso
 - when loose ends are open, a second line: `2 loose ends open.`
 
 No task title, loose-end note or mood is ever in a notice. A notice is proactive output that the
-kernel keeps in its own database (tier 1 on the appliance) whatever its sensitivity, and the
-owner's memory policy keeps sensitive topics out of proactive output. The page and the assistant
-say what the task is.
+kernel keeps in its own database (tier 1 on the appliance) whatever its sensitivity, so it carries
+none of the person's words. The page and the assistant say what the task is. (SayLLM's proposed
+memory policy, `sayllm-memory-and-sleep-proposal.md` §8, would also keep sensitive topics out of
+proactive output. It is a proposal, not a register entry.)
 
 **Who sees it.** Greenhouse notices are household-wide and only the owner reads them (kernel
 `require_owner`). SayLLM shows only an allowlist of categories. So:
@@ -384,7 +385,8 @@ are optional. Environment: `GREENHOUSE_KERNEL_URL` (default `http://127.0.0.1:40
 
 ## Not yet
 
-- **Phone push.** Waits on Greenhouse's iOS shell (roadmap O04).
+- **Phone push.** Waits on Greenhouse's iOS shell: the roadmap's "Richer iOS / Siri / desktop
+  clients", planned. The kernel queues external deliveries until then.
 - **Check-ins that reach non-owners as notices.** Notices are household-wide and owner-only.
 - **A model-worded check-in or an evening recap without asking.** These would need
   `model_compute: [background]` (D18). The proposal recommends not now.
