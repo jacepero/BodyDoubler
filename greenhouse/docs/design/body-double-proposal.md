@@ -79,15 +79,20 @@ These are read from Greenhouse source as of mid-October.
 - **Every tool call is in the kernel's audit with its arguments.** Dispatch writes each call,
   allowed or refused, to `tool_audit` with the arguments' JSON. A `log` call therefore puts the
   person's words into `kernel.db` as well as the journal. On the appliance that is tier 1, not the
-  passkey tier. Chat messages are already stored by SayLLM. The widget's narrate box adds the
-  kernel copy.
-- **Private SayLLM turns still dispatch tools, and the app is not told.** A `log` from a private
-  message would be kept, although the owner asked that a private message "can never be used
-  moving forward".
-- **Tool schemas cost context in every turn.** The kernel offers every callable tool in every
-  chat turn, with no relevance filtering. Body Double's nine come to about 780 tokens
-  (chars/4), on an 8,192-token runtime. The descriptions were cut to the minimum for that
-  reason. qwen3:8b has been sensitive to tool conditioning before.
+  passkey tier. Chat messages are already stored by SayLLM; the widget's narrate box adds the
+  kernel copy. Private turns are the exception: the kernel keeps no arguments for them.
+- **A private SayLLM turn still reaches the app, and the app is not told.** The owner answered
+  "Allowed, log w/o details" for tools in private turns (chat, 2026-10-10). The kernel honours
+  that, since its log keeps no arguments, but Body Double would still keep the words. That is not
+  "effectively never having happened".
+- **Tool schemas cost context in every turn, and SayLLM budgets for less.** The kernel offers
+  every callable tool in every chat turn, with no relevance filtering. Body Double's nine come to
+  about 780 tokens (chars/4) on an 8,192-token runtime. SayLLM reserves 512 tokens of overhead for
+  the kernel's policy, serving line and all tool schemas
+  (`GREENHOUSE_RESERVED_OVERHEAD_TOKENS`). Those already ran past 512 before this app, and only
+  the 0.8 safety factor absorbs the rest. Adding Body Double could push a long conversation over
+  the runtime's context, and the kernel then answers 400. The descriptions were cut to the
+  minimum. qwen3:8b has also been sensitive to tool conditioning before.
 - **Check-ins are at most five minutes late.** The tick runs every five minutes, like Home
   Assistant's house check, to keep scheduled calls in the audit and Activity view down. A
   per-minute tick would make them exact at 1,440 audited calls a day.
@@ -138,19 +143,27 @@ These are read from Greenhouse source as of mid-October.
    - the "Body double" rail page;
    - the Focus widget on Home by default, and the other widgets on the page;
    - Check-ins off Home by default.
-9. **Private turns.** Today a body-double write from a private SayLLM turn is stored.
-   **Recommended:** a small kernel change that tells apps a call comes from a private turn, so
-   that Body Double stores nothing from one. It touches a reviewed kernel path, so it is the
-   owner's to allow.
-   - Alternative: accept it for now and say so in the app doc.
+9. **Private turns.** The owner's answer, "Allowed, log w/o details", covers the kernel's log,
+   not what an app keeps. **Recommended:** extend it. A small kernel change tells apps a call
+   comes from a private turn, and Body Double then stores nothing from one. It touches a
+   reviewed kernel path.
+   - Alternative: keep the current behaviour and say in the app doc that a private narration is
+     kept.
    - Alternative: allow writes only from the page, not from chat.
 10. **The journal in the kernel's tool audit.** **Recommended:**
-    - accept it for now, since chat text is already in SayLLM's store;
-    - later, give the page a data-plane route through the kernel proxy, which keeps no tool
-      log, so the narrate box no longer goes through a tool.
+    - accept it for now, since chat text is already in SayLLM's store and private turns keep no
+      arguments;
+    - later, give the page a data-plane route through the kernel proxy, which keeps no tool log,
+      so the narrate box no longer goes through a tool.
 
     The kernel proxy's handling of browser writes was not verified here, so that route is a
     follow-up, not part of this build.
+11. **SayLLM's context budget.** **Recommended:** before any grant, raise SayLLM's
+    `GREENHOUSE_RESERVED_OVERHEAD_TOKENS` by about 800, from 512 to about 1,300, so that the
+    added schemas come out of history, not out of the safety margin. Then check a long
+    conversation on the live configuration.
+    - Alternative: a SayLLM change that offers Body Double's tools only with the Body double
+      persona.
 
 ## Delivery, after the answers
 
@@ -163,8 +176,8 @@ These are read from Greenhouse source as of mid-October.
      `cargo clippy -p body-double-app --all-targets --no-deps -- -D warnings`.
    - The crate was built here against a reconstruction of the kernel's app SDK (`README.md`).
      The real crate is the test that counts.
-3. **SayLLM.** Apply `llmplayground/INTEGRATION.md`, run SayLLM's tests, then deploy `public/`
-   with the owner's OK.
+3. **SayLLM.** Apply `llmplayground/INTEGRATION.md` and run SayLLM's tests. Raise the reserved
+   overhead (decision 11), then deploy `public/` with the owner's OK.
 4. **VM140.**
    - Build, then run `deploy/body-double/install-body-double.sh`.
    - The owner approves the contract and sets grants as `greenhouse-op-owner`
