@@ -4,10 +4,14 @@ The Body double app (`apps/body-double.md`) has no UI of its own. A person sees 
 **Body double** entry in the rail, four Home widgets, check-in notices for the owner, and a
 persona for chat. This folder holds what SayLLM needs.
 
+Someone who has already saved a rail or a Home layout (the owner, most likely) does not get these
+on their own: turn on Body double under Apps, and add Focus from Customize → Add widgets. "By
+default" means for someone new.
+
 | File here | What to do with it |
 |---|---|
 | `public/body-double-widgets.js` | New. Copy to `llmplayground/public/`. The four cards and their pure helpers. It imports nothing. |
-| `tests/body-double-widgets.test.js` | New. Copy to `llmplayground/tests/`. 25 `node:test` tests; no DOM needed. |
+| `tests/body-double-widgets.test.js` | New. Copy to `llmplayground/tests/`. 29 `node:test` tests; no DOM needed. |
 | `public/body-double.css` | **Do not copy.** A reference copy of the rules that go into `styles.css` (step 6). It is not in `STATIC_ASSETS`, so it would never be served. |
 | `INTEGRATION.md` | This file. |
 
@@ -34,8 +38,15 @@ Icons and the tint are existing ones: `persona`, `report`, `pin`, `clock` (plus 
 `arrow-up`, `plus`, `check-circle`, `chat` inside the cards), all `violet`. No built app uses violet
 yet; the design reserved it for Finance, which is not built.
 
-What is typed in a box survives the card's minute refresh and keeps the cursor. A failed write keeps
-the words and says why in the card's note line; it does not reload.
+What is typed in a box survives the card's minute refresh and keeps the cursor. Chromium fires
+`blur` on the box as Home empties the card, and the card ignores that one. On iOS a `focus()` made
+outside a tap may not bring the keyboard back. A box is cleared as soon as its words are sent, so
+anything typed while the call is out stays. A failed write puts the words back, unless something
+new was typed, and says why in the card's note line.
+
+Today and Loose ends never lose a row without a word. When a card is short, Today hides its oldest
+lines first, so the line just said always shows, and its "N earlier" line counts them. Loose ends
+hides from the end and counts in "N more" (`fitWithCount`, in place of Home's `fitRows`).
 
 ## 1. `public/widgets.js`
 
@@ -90,7 +101,7 @@ initialized.
 
 // The Body double app's cards (body-double-widgets.js). They get this file's
 // helpers rather than importing it, since this file imports them.
-registerBodyDoubleWidgets({ registerWidget, el, button, input, icon, headButton, fitRows });
+registerBodyDoubleWidgets({ registerWidget, el, button, input, icon, headButton });
 ```
 
 Optional, for the owner's Activity card: the app's `checkins.tick` schedule then reads
@@ -115,10 +126,12 @@ section, 2026-10-14T03:32:46Z).
 ## 2. `public/apps.js`
 
 A rail entry, after Timers (APPS as of the Read 2026-10-13T22:44:51Z and panel_pages.py
-2026-10-14T02:29:56Z). There is no `pages.js` entry: the page shows the four cards at their `large`
-spans (`home.js` `renderPage`, `widgetSpan(widget, "large")`), which the cards set through
-`legacy.large`: Focus 8×3, Today 4×6, Loose ends 4×3, Check-ins 4×3. On a computer that packs into six
-rows; below 1180 px it flows in two columns.
+2026-10-14T02:29:56Z). There is no `pages.js` entry, so `home.js` `renderPage` puts the four cards
+in `div.board.app-page`. The later `.app-page` rule (`display: flex; flex-direction: column`)
+overrides `.board`'s grid, so the cards stack full width at their natural height: Focus, Today,
+Loose ends, Check-ins. Their `legacy.large` spans set only `ctx.span`, which Today's line count
+reads. A packed grid would need `.board.app-page { display: grid; }`, after checking the other
+pages that use this fallback.
 
 **Before**
 
@@ -214,8 +227,9 @@ kept short because the PDF files were added to the list later that day.
 
 Two places. The rules reuse Home's classes (`.widget-row`, `.widget-row-name`, `.empty-state`,
 `.btn`, `.icon-btn`, `.sw`, `.segmented`/`.seg`, `.tp-input`, `.widget-line`, `.muted`) and tokens
-(`--violet`, `--violet-bg`, `--t2`, `--t3`, `--surface`). Each new selector is more specific than the
-rule it adjusts, so order in the file does not matter. `public/body-double.css` holds the same rules.
+(`--violet`, `--violet-bg`, `--t2`, `--t3`, `--surface`). Each rule that adjusts one of Home's is more
+specific than it, and the phone rule is scoped under `.w`, so where each block sits in the file
+does not matter. `public/body-double.css` holds the same rules.
 
 After the Timers page rules (styles.css, Timers page block from 2026-10-14T02:33Z).
 
@@ -236,12 +250,14 @@ After the Timers page rules (styles.css, Timers page block from 2026-10-14T02:33
 .bd-due { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; padding: 6px 10px; border-radius: 9px; flex: none;
   background: var(--violet-bg); color: var(--violet); font-size: 13px; font-weight: 600; }
 .bd-due .ic { font-size: 15px; }
+.bd-due > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-now { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin-top: 10px; flex: none; }
 .bd-task { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-task.bd-none { color: var(--t3); font-weight: 500; }
 .bd-elapsed { font-family: "Inter Display", "Inter", sans-serif; font-size: clamp(28px, 12cqi, 52px); font-weight: 300; line-height: 1.05; letter-spacing: -.02em; }
 .bd-meta { color: var(--t3); font-size: 12.5px; }
-.bd-paused { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; color: var(--t3); font-size: 12.5px; flex: none; }
+.bd-paused { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; color: var(--t3); font-size: 12.5px; flex: none;
+  max-height: 32px; overflow: hidden; }
 .bd-paused-name { color: var(--t2); }
 .bd-say { display: flex; gap: 8px; margin-top: auto; padding-top: 10px; flex: none; }
 .bd-say input.tp-input { flex: 1; min-width: 0; height: 32px; }
@@ -249,7 +265,7 @@ After the Timers page rules (styles.css, Timers page block from 2026-10-14T02:33
 .bd-list > [hidden] { display: none; }
 .bd-entry { align-items: flex-start; }
 .bd-time { flex: none; width: 42px; padding-top: 1px; color: var(--t3); font-size: 12.5px; }
-.bd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-text, .bd-entry .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-earlier { margin: 0; padding: 4px 0; color: var(--t3); font-size: 12.5px; }
 .bd-switch { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 13.5px; flex: none; }
 .bd-switch .sw[aria-checked="true"] { background: var(--violet); }
@@ -275,7 +291,7 @@ when the box is tapped.
 ```css
   .drawer { top: auto; left: 0; bottom: calc(60px + env(safe-area-inset-bottom)); width: 100%; height: 48dvh; padding: 18px 16px;
     border-left: 0; border-top: 1px solid var(--line-2); border-radius: 18px 18px 0 0; }
-  .bd-say input.tp-input { height: 40px; font-size: 16px; }
+  .w .bd-say input.tp-input { height: 40px; font-size: 16px; }
 }
 ```
 
@@ -317,7 +333,7 @@ Asked for a recap of the day, read body-double__day and write four to six plain 
 ## Checked so far
 
 - `node --check public/body-double-widgets.js`; `node --test tests/body-double-widgets.test.js`:
-  25 pass (Node 22.22). Node 22 does not take a directory for `--test`; give the file, or a glob
+  29 pass (Node 22.22). Node 22 does not take a directory for `--test`; give the file, or a glob
   such as `node --test 'tests/*.test.js'`.
 - Every "Before" above was applied, exactly once each, to the files reconstructed from the owner's
   sessions (`widgets.js`, `apps.js`, `home.js`, `styles.css`, as of 2026-10-14) and to the verbatim

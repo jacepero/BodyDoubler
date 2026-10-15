@@ -154,7 +154,12 @@ tier-2 volume once that exists (proposal, decision 4).
    ```bash
    /opt/greenhouse/bin/greenhouse-admin revoke-app-credential --db /var/lib/greenhouse/kernel/kernel.db \
        --app-id body-double --credential-file /etc/greenhouse/apps/body-double/registration.credential
+   mv /etc/greenhouse/apps/body-double/registration.credential \
+      /etc/greenhouse/apps/body-double/registration.credential.revoked-<stamp>
    ```
+
+   The revoked file is moved aside, so that a later run of `install-body-double.sh` provisions a
+   new credential instead of starting the app with the dead one.
 
 4. To withdraw the contract as well, the owner runs, as `greenhouse-op-owner`:
 

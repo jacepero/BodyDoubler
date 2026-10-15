@@ -246,17 +246,55 @@ function keepDraft(body, box) {
   box.value = draft.value;
   box.addEventListener("input", () => { draft.value = box.value; });
   box.addEventListener("focus", () => { draft.focused = true; });
-  box.addEventListener("blur", () => { draft.focused = false; });
+  // Home empties the card before each render, and Chromium fires "blur" on
+  // the focused box as it goes. That blur is not the person leaving the box,
+  // so it is ignored: by the time it is looked at, the box is gone.
+  box.addEventListener("blur", () => {
+    setTimeout(() => { if (box.isConnected) draft.focused = false; });
+  });
   return draft;
+}
+
+/**
+ * Like Home's fitRows, with a count: hides whole rows until `list` fits, the
+ * first ones first (Today: the oldest) or the last ones first (Loose ends),
+ * and keeps `line` saying how many are not shown, so nothing goes missing
+ * without a word. `base` is how many were left out before fitting.
+ */
+export function fitWithCount(list, line, { base = 0, label, dropFirst = false }) {
+  const show = (hidden) => {
+    const count = base + hidden;
+    line.hidden = count === 0;
+    line.textContent = count ? label(count) : "";
+  };
+  show(0);
+  if (typeof ResizeObserver !== "function") return;
+  let frame = 0;
+  const apply = () => {
+    frame = 0;
+    if (!list.isConnected) { observer.disconnect(); return; }
+    const rows = [...list.children].filter((child) => child !== line);
+    for (const row of rows) row.hidden = false;
+    show(0);
+    const order = dropFirst ? rows : [...rows].reverse();
+    let hidden = 0;
+    while (hidden < rows.length - 1 && list.scrollHeight > list.clientHeight + 1) {
+      order[hidden].hidden = true;
+      hidden += 1;
+      show(hidden);
+    }
+  };
+  const observer = new ResizeObserver(() => { if (!frame) frame = requestAnimationFrame(apply); });
+  observer.observe(list);
 }
 
 // ---- the cards ---------------------------------------------------------------------------
 
 /**
  * Registers the Body double cards with widgets.js's own helpers:
- * { registerWidget, el, button, input, icon, headButton, fitRows }.
+ * { registerWidget, el, button, input, icon, headButton }.
  */
-export function registerBodyDoubleWidgets({ registerWidget, el, button, input, icon, headButton, fitRows }) {
+export function registerBodyDoubleWidgets({ registerWidget, el, button, input, icon, headButton }) {
   function row(className, ...children) {
     const node = el("div", className);
     node.append(...children.filter(Boolean));
@@ -286,10 +324,16 @@ export function registerBodyDoubleWidgets({ registerWidget, el, button, input, i
       }
       if (!text) return;
       busy = true;
-      await act(ctx, action.what, action.name, action.args(text), controls, () => {
-        box.value = "";
-        draft.value = "";
-      });
+      // Cleared at once, as the chat box is, so whatever is typed while the
+      // call is out stays. The draft is the truth: a refresh during the call
+      // may have replaced the box.
+      box.value = "";
+      draft.value = "";
+      const sent = await act(ctx, action.what, action.name, action.args(text), controls);
+      if (!sent && !draft.value) {
+        draft.value = text;
+        if (box.isConnected) box.value = text;
+      }
       busy = false;
       for (const control of controls) control.disabled = false;
     };
@@ -422,17 +466,24 @@ export function registerBodyDoubleWidgets({ registerWidget, el, button, input, i
         body.append(row("empty-state", icon("chat"), el("span", "", "Nothing logged today.")));
         return;
       }
-      // Oldest first, the newest last, as the day went.
+      // Oldest first, the newest last, as the day went. When the card is
+      // short, the oldest give way, so the line just said always shows.
       const list = el("div", "bd-list");
-      if (earlier) list.append(el("p", "bd-earlier", `${earlier} earlier`));
+      const earlierLine = el("p", "bd-earlier", "");
+      list.append(earlierLine);
       for (const entry of rows) {
         const text = el("span", "bd-text", entry.text);
         text.title = entry.text;
-        const words = row("widget-row-name", text, entry.summary ? el("span", "muted", entry.summary) : null);
+        let summary = null;
+        if (entry.summary) {
+          summary = el("span", "muted", entry.summary);
+          summary.title = entry.summary;
+        }
+        const words = row("widget-row-name", text, summary);
         list.append(row("widget-row bd-entry", el("span", "bd-time num", entry.time), words));
       }
       body.append(list);
-      fitRows(list);
+      fitWithCount(list, earlierLine, { base: earlier, label: (n) => `${n} earlier`, dropFirst: true });
     },
   });
 
@@ -473,9 +524,10 @@ export function registerBodyDoubleWidgets({ registerWidget, el, button, input, i
           }
           list.append(row("widget-row", words, close));
         }
-        if (more) list.append(el("p", "bd-earlier", `${more} more`));
+        const moreLine = el("p", "bd-earlier", "");
+        list.append(moreLine);
         body.append(list);
-        fitRows(list);
+        fitWithCount(list, moreLine, { base: more, label: (n) => `${n} more` });
       }
       if (ctx.can(tool("open_thread"))) {
         place(body, boxForm(body, ctx, "Something to come back to", [{

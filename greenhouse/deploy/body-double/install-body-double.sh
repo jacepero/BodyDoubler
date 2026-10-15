@@ -73,8 +73,11 @@ for name in re.findall(r"^set (\w+) \{", block, re.M):
         nft("add", "set", "inet", "greenhouse_egress", name, "{ " + body + "; }")
         print("added set", name)
 if "body_double_cgroups" not in nft("list", "chain", "inet", "greenhouse_egress", "output").stdout:
-    for rule in (l for l in spec.splitlines() if l.startswith("socket ")):
-        nft("add", "rule", "inet", "greenhouse_egress", "output", *rule.split())
+    # One transaction: all three rules or none, so a half-added set never
+    # leaves the app without its final drop (a re-run would skip it).
+    rules = [l for l in spec.splitlines() if l.startswith("socket ")]
+    subprocess.run(["nft", "-f", "-"], check=True, text=True,
+                   input="".join(f"add rule inet greenhouse_egress output {r}\n" for r in rules))
     print("added rules")
 PY
 

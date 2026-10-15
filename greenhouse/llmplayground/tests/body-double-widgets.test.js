@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   EVERY_CHOICES, LIMITS, boxText, checkinArgs, checkinPrompt, checkinSummary, deviceZone, elapsedLabel, focusView,
-  journalLimit, journalRows, looseEnds, registerBodyDoubleWidgets, spanLabel,
+  fitWithCount, journalLimit, journalRows, looseEnds, registerBodyDoubleWidgets, spanLabel,
 } from "../public/body-double-widgets.js";
 
 // The tool results as apps/body-double.md gives them.
@@ -51,7 +51,21 @@ class FakeNode {
     Object.assign(this, { hidden: false, disabled: false, isConnected: true, value: "", title: "" });
   }
   append(...nodes) { this.children.push(...nodes); }
-  replaceChildren(...nodes) { this.children = nodes; }
+  // As Chromium does: a focused box being removed gets "blur" while it is
+  // still in the page, and only then is it gone.
+  replaceChildren(...nodes) {
+    const gone = [];
+    const walk = (node) => { gone.push(node); for (const child of node.children || []) walk(child); };
+    for (const child of this.children) walk(child);
+    for (const node of gone) {
+      if (node.focused) {
+        node.focused = false;
+        node.fire("blur");
+      }
+    }
+    for (const node of gone) node.isConnected = false;
+    this.children = nodes;
+  }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return this.attributes[name] ?? null; }
   addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); }
@@ -92,9 +106,7 @@ function fakeDom() {
     if (iconName) control.setAttribute("aria-label", label);
     return control;
   };
-  const fitted = [];
-  const fitRows = (list) => { fitted.push(list); };
-  return { el, button, input, icon, headButton, fitRows, fitted };
+  return { el, button, input, icon, headButton };
 }
 
 function setup() {
@@ -149,7 +161,8 @@ const find = (node, test) => all(node, test)[0] || null;
 const text = (node) => [node.textContent, ...(node.children || []).map(text)].filter(Boolean).join(" ");
 const byClass = (name) => (node) => String(node.className || "").split(" ").includes(name);
 const click = (node) => node.fire("click");
-const settle = () => new Promise((resolve) => setImmediate(resolve));
+// Past pending promises and timers (a box looks at a blur a tick later).
+const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 // ---- time ---------------------------------------------------------------------------------
 
@@ -397,7 +410,7 @@ test("Focus: with no current task there is nothing to finish", () => {
   assert.ok(find(body, (node) => node.tag === "input"), "the box is still there to start one");
 });
 
-test("Focus: what is being typed survives the card's refresh, cursor and all", () => {
+test("Focus: what is being typed survives the card's refresh, cursor and all", async () => {
   const { registry, dom } = setup();
   const ctx = fakeCtx();
   const body = show(registry, dom, "bd-focus", NOW, ctx);
@@ -405,14 +418,19 @@ test("Focus: what is being typed survives the card's refresh, cursor and all", (
   box.focus();
   box.value = "half a thou";
   box.fire("input");
-  // home.js empties the body and renders the next answer into it.
+  // home.js empties the body (the box gets "blur" as it goes) and renders the
+  // next answer into it.
   body.replaceChildren();
   registry.get("bd-focus").render(NOW, body, ctx);
+  await settle();
   const again = find(body, (node) => node.tag === "input");
   assert.notEqual(again, box);
   assert.equal(again.value, "half a thou");
   assert.equal(again.focused, true, "the cursor is back where it was");
+  // The person leaves the box: that blur counts.
+  again.focused = false;
   again.fire("blur");
+  await settle();
   body.replaceChildren();
   registry.get("bd-focus").render(NOW, body, ctx);
   const third = find(body, (node) => node.tag === "input");
@@ -458,7 +476,8 @@ test("Today shows time, words and summary, newest last, fitted to the card", () 
   assert.deepEqual(rows.map((row) => text(find(row, byClass("bd-time")))), ["13:49", "14:32", "14:40"]);
   assert.equal(text(find(rows[2], byClass("muted"))), "Switched to the WGU assignment");
   assert.equal(ctx.sub, "3 entries");
-  assert.deepEqual(dom.fitted, [find(body, byClass("bd-list"))]);
+  const earlier = find(body, byClass("bd-earlier"));
+  assert.equal(earlier.hidden, true, "nothing earlier to count");
   const empty = show(registry, dom, "bd-journal", { ...DAY, entries: [] }, fakeCtx());
   assert.match(text(empty), /Nothing logged today/);
 });
@@ -555,4 +574,91 @@ test("the module builds nodes only, and imports nothing", async () => {
   assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML/);
   assert.doesNotMatch(source, /^import /m, "widgets.js hands it its helpers");
   assert.doesNotMatch(source, /\bdocument\./, "the DOM comes through el, button and input");
+});
+
+// ---- fitting with a count -------------------------------------------------------------------
+
+/** A list whose rows are 20 px tall in a box `room` px high, observed at once. */
+function fittingList(rowCount, room) {
+  const line = new FakeNode("p", "bd-earlier");
+  const rows = Array.from({ length: rowCount }, (_, i) => new FakeNode("div", "widget-row", `row ${i + 1}`));
+  const list = new FakeNode("div", "bd-list");
+  return { list, line, rows, room };
+}
+
+function withObserver(run) {
+  const saved = { ResizeObserver: globalThis.ResizeObserver, raf: globalThis.requestAnimationFrame };
+  globalThis.requestAnimationFrame = (fn) => { fn(); return 1; };
+  globalThis.ResizeObserver = class { constructor(fn) { this.fn = fn; } observe() { this.fn(); } disconnect() {} };
+  try { run(); } finally {
+    globalThis.ResizeObserver = saved.ResizeObserver;
+    globalThis.requestAnimationFrame = saved.raf;
+  }
+}
+
+function measure(list, room) {
+  Object.defineProperty(list, "scrollHeight", { get: () => list.children.filter((c) => !c.hidden).length * 20 });
+  Object.defineProperty(list, "clientHeight", { get: () => room });
+}
+
+test("Today keeps the newest lines and counts the oldest it hides", () => {
+  withObserver(() => {
+    const { list, line, rows } = fittingList(6, 80);
+    list.append(line, ...rows);
+    measure(list, 80);
+    fitWithCount(list, line, { base: 2, label: (n) => `${n} earlier`, dropFirst: true });
+    // Room for four: the "earlier" line and the three newest.
+    assert.deepEqual(rows.map((row) => row.hidden), [true, true, true, false, false, false]);
+    assert.equal(line.hidden, false);
+    assert.equal(line.textContent, "5 earlier");
+  });
+});
+
+test("Loose ends keeps the first and counts what does not fit in 'more'", () => {
+  withObserver(() => {
+    const { list, line, rows } = fittingList(5, 60);
+    list.append(...rows, line);
+    measure(list, 60);
+    fitWithCount(list, line, { label: (n) => `${n} more` });
+    assert.deepEqual(rows.map((row) => row.hidden), [false, false, true, true, true]);
+    assert.equal(line.textContent, "3 more");
+    // Everything fits: no line at all.
+    const roomy = fittingList(2, 200);
+    roomy.list.append(...roomy.rows, roomy.line);
+    measure(roomy.list, 200);
+    fitWithCount(roomy.list, roomy.line, { label: (n) => `${n} more` });
+    assert.equal(roomy.line.hidden, true);
+    assert.deepEqual(roomy.rows.map((row) => row.hidden), [false, false]);
+  });
+});
+
+test("a box keeps what was typed while its words were being sent", async () => {
+  const { registry, dom } = setup();
+  let finish;
+  const ctx = fakeCtx({ answer: () => new Promise((resolve) => { finish = resolve; }) });
+  const body = show(registry, dom, "bd-focus", NOW, ctx);
+  const box = find(body, (node) => node.tag === "input");
+  box.value = "lunch";
+  box.fire("input");
+  find(body, (node) => node.tag === "form").fire("submit");
+  assert.equal(box.value, "", "cleared as soon as it is sent");
+  box.value = "back at my desk";
+  box.fire("input");
+  finish({});
+  await settle();
+  assert.deepEqual(ctx.calls[0], ["body-double.log", { text: "lunch" }]);
+  assert.equal(box.value, "back at my desk", "the next thought is not wiped");
+});
+
+test("a failed send puts the words back only if nothing new was typed", async () => {
+  const { registry, dom } = setup();
+  const ctx = fakeCtx({ answer: () => Promise.reject(new Error("kernel unavailable")) });
+  const body = show(registry, dom, "bd-focus", NOW, ctx);
+  const box = find(body, (node) => node.tag === "input");
+  box.value = "lunch";
+  box.fire("input");
+  find(body, (node) => node.tag === "form").fire("submit");
+  await settle();
+  assert.equal(box.value, "lunch");
+  assert.match(ctx.notes.at(-1), /kernel unavailable/);
 });

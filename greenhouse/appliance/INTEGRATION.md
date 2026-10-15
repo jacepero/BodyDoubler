@@ -30,7 +30,11 @@ Nothing else changes:
 Reconstructed final: the recon Write 2026-10-15T01:23:32Z plus its Edits through 02:04:34Z
 (reports2/deploy-runtime.md §9.2). Three edits.
 
-The crate's sources.
+The crate's sources. **This one edit lands in the same commit that adds `body-double-app` to the
+root `Cargo.toml` members**, even while the rest of this file waits. The image build copies only
+the crates it lists, and Cargo cannot load a workspace whose member is missing, so without it
+every image build fails. On its own it is harmless: the crate is copied, not built, until the
+`-p body-double-app` edit below.
 
 **Before**
 

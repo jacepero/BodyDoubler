@@ -53,8 +53,14 @@ counts. Run the checks above in the real workspace before anything is deployed.
 ## Into `jacepero/greenhouse`
 
 1. Copy `body-double-app/`, `apps/body-double.md`, `docs/design/body-double-proposal.md` and the
-   `deploy/` files. Add `"body-double-app"` to the root `Cargo.toml` members. Let Cargo add the
-   crate's lock entry; it needs no crate the lock does not already have.
+   `deploy/` files. Add `"body-double-app"` to the root `Cargo.toml` members.
+   - In the same commit, add `COPY body-double-app body-double-app` to `appliance/Containerfile`'s
+     `greenhouse-rust` stage (the first edit in `appliance/INTEGRATION.md`). The image build
+     copies only the crates it lists, and Cargo cannot load the workspace with a member
+     missing. The copy alone builds nothing.
+   - Build once without `--locked` so Cargo adds the crate's own lock entry. `git diff
+     Cargo.lock` should then show only that entry, because the crate needs no crate the lock
+     lacks. Use `--locked` from then on.
 2. Run `cargo test -p body-double-app` and the clippy line above against the real kernel crate.
 3. Follow [`deploy/body-double.md`](deploy/body-double.md) for VM140, and
    [`appliance/INTEGRATION.md`](appliance/INTEGRATION.md) for the bootc image.
@@ -77,8 +83,14 @@ greenhouse/docs/design/body-double-proposal.md there first.
    greenhouse/Cargo.toml or Cargo.lock from BodyDoubler; they are a stand-in for this repo's
    kernel crate.
 3. Add "body-double-app" to the root Cargo.toml members, and add the line in
-   deploy/greenhouse.sysusers.d/body-double.conf to deploy/greenhouse.sysusers. Build with
-   --locked; if Cargo wants to change any existing lock entry, stop and report it instead.
+   deploy/greenhouse.sysusers.d/body-double.conf to deploy/greenhouse.sysusers. In the same
+   commit, add `COPY body-double-app body-double-app` after `COPY weather-app weather-app` in
+   appliance/Containerfile's greenhouse-rust stage (appliance/INTEGRATION.md, step 1, first
+   edit): the image build cannot load the workspace without it. Then run
+   cargo test -p body-double-app --offline once without --locked so Cargo adds the crate's own
+   lock entry, and check git diff Cargo.lock. Only the body-double-app package entry may
+   appear. If any existing entry changes or a new third-party crate appears, stop and report it.
+   Commit the updated Cargo.lock; builds after that use --locked.
 4. Run cargo test -p body-double-app, then
    cargo clippy -p body-double-app --all-targets --no-deps -- -D warnings, then
    rustfmt --edition 2021 --check on the crate's files. The crate was built against a
@@ -86,7 +98,8 @@ greenhouse/docs/design/body-double-proposal.md there first.
    differences in body-double-app, and report each one.
 5. Apply llmplayground/INTEGRATION.md to SayLLM (the new module, its test, and the listed
    edits). Run SayLLM's own tests.
-6. Do not edit appliance/ yet. Report appliance/INTEGRATION.md's edits as pending.
+6. Make no other appliance/ edit yet. Report appliance/INTEGRATION.md's remaining edits as
+   pending.
 7. Commit, without deploying. Do not register, approve or grant anything, and do not touch
    production. The proposal's decisions are the owner's.
 

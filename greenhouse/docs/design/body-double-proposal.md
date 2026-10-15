@@ -141,7 +141,8 @@ These are read from Greenhouse source as of mid-October.
    keeps them from forming memories.
 8. **Where it shows.** **Recommended:**
    - the "Body double" rail page;
-   - the Focus widget on Home by default, and the other widgets on the page;
+   - the Focus widget on a new person's Home by default, and the other widgets on the page.
+     Someone with a saved layout, the owner included, adds Focus from Add widgets;
    - Check-ins off Home by default.
 9. **Private turns.** The owner's answer, "Allowed, log w/o details", covers the kernel's log,
    not what an app keeps. **Recommended:** extend it. A small kernel change tells apps a call
@@ -169,7 +170,9 @@ These are read from Greenhouse source as of mid-October.
 
 1. **Copy into the repository.** `body-double-app/` joins the workspace members, and
    `Cargo.lock` gains its entry: no new crate, only `rusqlite`, `axum`, `tokio`, `serde`,
-   `serde_json` and `reqwest`, all already locked. The other files are `apps/body-double.md`,
+   `serde_json` and `reqwest`, all already locked. The appliance Containerfile's
+   `COPY body-double-app` line lands in the same commit; without it the image build cannot load
+   the workspace. The other files are `apps/body-double.md`,
    this proposal, and the `deploy/` files.
 2. **Check against the real kernel crate.**
    - Run `cargo test -p body-double-app` and
