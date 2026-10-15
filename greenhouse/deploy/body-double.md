@@ -1,7 +1,7 @@
 # Body double app on VM140
 
-Behaviour: [`apps/body-double.md`](../apps/body-double.md). The owner's decisions:
-[`docs/design/body-double-proposal.md`](../docs/design/body-double-proposal.md).
+Behaviour: [`apps/body-double.md`](../apps/body-double.md). The decisions it needs from the owner,
+none of them made yet: [`docs/design/body-double-proposal.md`](../docs/design/body-double-proposal.md).
 
 **Status:** not deployed. Nothing is registered, approved or granted.
 
@@ -146,8 +146,8 @@ that would put entries in someone's journal or raise a real check-in.
 
 The journal is personal and longitudinal. On VM140 it is in the app's state directory, covered by
 the weekly VM backup with the other apps. Before an update that changes its schema, copy it with
-SQLite's backup API, as for the kernel database. On the appliance it moves to the passkey-unlocked
-tier-2 volume once that exists (proposal, decision 4).
+SQLite's backup API, as for the kernel database. For the appliance, the proposal recommends the
+passkey-unlocked tier-2 volume once that exists (decision 4, the owner's to answer).
 
 ## Rollback
 

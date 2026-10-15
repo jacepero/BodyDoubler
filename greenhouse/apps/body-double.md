@@ -258,8 +258,9 @@ zone follows the configuration's, including a later change to it.
   - It counts toward the eight unanswered like any other check-in.
   - `next` shows whichever is sooner, the chain's or the one-off.
 - `checkins {on: false}` stops the chain, cancels a requested one, and takes down an unread
-  notice. `checkins {on: true}` after unanswered check-ins answers them too and takes the notice
-  down.
+  notice. `checkins {on: true}` that turns check-ins back on (they were off, or the chain had
+  stopped after eight unanswered) also answers the open ones and takes the notice down. While the
+  chain is still running it leaves them open; the next write answers them.
 
 Quiet hours are local to the person's zone and may wrap midnight. A quiet end that falls in the
 repeated hour of a DST change ends at its first occurrence. Times come from the kernel's clock
@@ -320,8 +321,8 @@ app; `AUTOINCREMENT` keeps them from being reused after a delete. An entry's `ta
 row id, and it is only ever joined to the same person's tasks. `plans.timezone` is empty for a
 person who never chose a zone.
 
-The journal is personal and longitudinal. It belongs on the passkey-unlocked tier-2 volume once
-the appliance has one (proposal, decision 4).
+The journal is personal and longitudinal. The proposal recommends the passkey-unlocked tier-2
+volume once the appliance has one (decision 4, the owner's to answer).
 
 ## Manifest
 
