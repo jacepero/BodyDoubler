@@ -24,6 +24,8 @@ pub struct Plan {
     /// Quiet hours as minutes after local midnight: (from, until). The window
     /// may wrap midnight.
     pub quiet: Option<(u32, u32)>,
+    /// The person's own zone; empty means the household's (configuration),
+    /// so a corrected configuration reaches everyone who never chose one.
     pub timezone: String,
     /// When the next check-in of the chain is due; None when nothing is
     /// scheduled.
@@ -71,12 +73,28 @@ pub fn in_quiet(quiet: Option<(u32, u32)>, minute: u32) -> bool {
     }
 }
 
-/// The first end of quiet hours after `utc`.
+/// The first end of quiet hours after `utc`. A wall time that happens twice
+/// (the hour a daylight-saving change repeats) has two instants, and either
+/// may be the next one.
 pub fn quiet_end_after(zone: &Zone, until: u32, utc: i64) -> i64 {
     let day = time::day_of(zone, utc);
     for offset in 0..=2 {
-        let end = zone.local_to_utc((day + offset) * 86_400 + i64::from(until) * 60);
-        if end > utc {
+        let wall = (day + offset) * 86_400 + i64::from(until) * 60;
+        let mut candidates: Vec<i64> = [
+            wall - zone.offset_at(wall - 86_400).0,
+            wall - zone.offset_at(wall + 86_400).0,
+        ]
+        .into_iter()
+        .filter(|t| *t > utc && t + zone.offset_at(*t).0 == wall)
+        .collect();
+        if candidates.is_empty() {
+            // A time skipped by a change: the instant after it.
+            let end = zone.local_to_utc(wall);
+            if end > utc {
+                candidates.push(end);
+            }
+        }
+        if let Some(end) = candidates.into_iter().min() {
             return end;
         }
     }
@@ -124,10 +142,13 @@ pub fn step(plan: &Plan, zone: &Zone, now: i64) -> Step {
     if oneoff_due {
         // Asked for at this time: raised even inside quiet hours. A chain
         // check-in due at the same moment is covered by this one.
+        // A one-off counts toward the eight too, so the chain still stops at
+        // eight in a row.
         let next = if chain_due {
             chain_next()
         } else {
             plan.next_due_at
+                .filter(|_| plan.unanswered + 1 < MAX_UNANSWERED)
         };
         return Step::Raise { next };
     }
@@ -320,6 +341,40 @@ mod tests {
         // Oct 31 is 03:30 UTC Nov 1; quiet ends at 08:00 EST = 13:00 UTC.
         let now = at(2026, 11, 1, 3, 30);
         assert_eq!(quiet_end_after(&ny, 8 * 60, now), at(2026, 11, 1, 13, 0));
+    }
+
+    #[test]
+    fn quiet_hours_ending_in_a_repeated_hour_end_the_same_night() {
+        let Ok(ny) = Zone::load("America/New_York") else {
+            return; // no zone database on this host
+        };
+        // 2026-11-01 01:00-01:59 happens twice in New York. At the second
+        // 01:10 (06:10 UTC, EST) quiet hours ending 01:30 end at 06:30 UTC,
+        // not a day later.
+        let now = at(2026, 11, 1, 6, 10);
+        assert_eq!(quiet_end_after(&ny, 90, now), at(2026, 11, 1, 6, 30));
+        // At the first 00:50 (04:50 UTC, EDT) they end at the first 01:30.
+        assert_eq!(
+            quiet_end_after(&ny, 90, at(2026, 11, 1, 4, 50)),
+            at(2026, 11, 1, 5, 30)
+        );
+    }
+
+    #[test]
+    fn a_one_off_counts_toward_the_eight() {
+        let utc = Zone::utc();
+        let mut p = plan();
+        p.quiet = None;
+        p.unanswered = MAX_UNANSWERED - 1;
+        let now = at(2026, 10, 15, 15, 0);
+        p.next_due_at = Some(now + 600);
+        p.oneoff_at = Some(now);
+        let s = step(&p, &utc, now);
+        assert_eq!(
+            s,
+            Step::Raise { next: None },
+            "the eighth in a row ends the chain"
+        );
     }
 
     #[test]

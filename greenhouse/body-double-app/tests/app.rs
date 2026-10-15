@@ -414,7 +414,6 @@ async fn invalid_arguments_are_refused_and_nothing_is_stored() {
         ),
         ("checkins", json!({"timezone": "Mars/Olympus_Mons"})),
         ("checkins", json!({"on": false, "next_in_minutes": 20})),
-        ("export", json!({"format": "pdf"})),
         ("now", json!({"verbose": true})),
         ("now", json!([1, 2])),
     ] {
@@ -589,7 +588,7 @@ async fn a_refused_notice_still_leaves_the_check_in_raised() {
 }
 
 #[tokio::test]
-async fn the_journal_exports_as_markdown_or_json() {
+async fn the_journal_downloads_as_markdown_or_json_through_the_proxy() {
     let h = harness().await;
     h.set_now(at(9, 0));
     h.call("set_task", json!({"title": "Inbox"})).await;
@@ -600,32 +599,104 @@ async fn the_journal_exports_as_markdown_or_json() {
     .await;
     h.call("open_thread", json!({"note": "reply to Sam"})).await;
 
-    let md = h.call("export", json!({})).await;
-    assert_eq!(md["format"], "markdown");
-    assert_eq!(md["filename"], "body-double-2026-10-15.md");
-    assert_eq!(md["entries"], 1);
-    let content = md["content"].as_str().unwrap();
+    // As the kernel's proxy relays a browser's GET: purpose data, the
+    // person's effects.
+    let data = |grants: &[&str]| {
+        let grants: Vec<String> = grants.iter().map(|g| g.to_string()).collect();
+        h.identity.mint(
+            IdentitySubject::Human("owner".into()),
+            "body-double",
+            IdentityPurpose::Data,
+            &grants,
+            300,
+        )
+    };
+    let get = |query: &str, token: String| {
+        h.http
+            .get(format!("{}/export{query}", h.url))
+            .header("x-greenhouse-identity", token)
+            .send()
+    };
+
+    let md = get("", data(&["read", "write"])).await.unwrap();
+    assert_eq!(md.status().as_u16(), 200);
+    assert_eq!(
+        md.headers()["content-disposition"],
+        "attachment; filename=\"body-double-2026-10-15.md\""
+    );
+    assert_eq!(md.headers()["content-type"], "text/markdown; charset=utf-8");
+    assert_eq!(md.headers()["cache-control"], "no-store");
+    let content = md.text().await.unwrap();
     assert!(content.starts_with("# Body double journal"));
     assert!(content.contains("## 2026-10-15 (Thu 15 Oct)"));
     assert!(content.contains("- **09:00** clearing email — _Email_ `[focused]` (Inbox)"));
     assert!(content.contains("- [active] Inbox ← current"));
     assert!(content.contains("- [open] reply to Sam"));
 
-    let js = h
-        .call(
-            "export",
-            json!({"format": "json", "from": "2026-10-15", "to": "2026-10-15"}),
-        )
-        .await;
-    assert_eq!(js["filename"], "body-double-2026-10-15-to-2026-10-15.json");
-    let doc: Value = serde_json::from_str(js["content"].as_str().unwrap()).unwrap();
+    let js = get(
+        "?format=json&from=2026-10-15&to=2026-10-15",
+        data(&["read"]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        js.headers()["content-disposition"],
+        "attachment; filename=\"body-double-2026-10-15-to-2026-10-15.json\""
+    );
+    let doc: Value = js.json().await.unwrap();
     assert_eq!(doc["entries"][0]["at"], "2026-10-15T09:00:00Z");
     assert_eq!(doc["entries"][0]["task"], "Inbox");
     assert_eq!(doc["tasks"][0]["status"], "active");
     assert_eq!(doc["threads"][0]["closed_at"], Value::Null);
+    assert_eq!(doc["timezone"], "UTC");
 
-    let none = h.call("export", json!({"from": "2026-10-16"})).await;
-    assert_eq!(none["entries"], 0);
+    // Read is needed; a tool token is not a browser's; arguments are checked.
+    let denied = get("", data(&["write"])).await.unwrap();
+    assert_eq!(denied.status().as_u16(), 403);
+    let tool_token = h.token(IdentitySubject::Human("owner".into()), &["read"]);
+    assert_eq!(get("", tool_token).await.unwrap().status().as_u16(), 403);
+    let bad = get("?format=pdf", data(&["read"])).await.unwrap();
+    assert_eq!(bad.status().as_u16(), 400);
+    let unknown = get("?everything=1", data(&["read"])).await.unwrap();
+    assert_eq!(unknown.status().as_u16(), 400);
+    // Export is not a tool: it never goes into a chat turn.
+    let (status, _) = h.call_as("owner", "export", json!({})).await;
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn the_day_is_sized_for_a_chat_turn() {
+    let h = harness().await;
+    for i in 0..70 {
+        h.set_now(at(8, 0) + i * 60);
+        h.call(
+            "log",
+            json!({"text": format!("entry {i}: {}", "x".repeat(400))}),
+        )
+        .await;
+    }
+    let day = h.call("day", json!({})).await;
+    let entries = day["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 60);
+    assert!(
+        entries[59]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("entry 69:"),
+        "the newest"
+    );
+    assert!(entries[0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("entry 10:"));
+    assert_eq!(entries[0]["text"].as_str().unwrap().chars().count(), 240);
+    assert_eq!(day["earlier"], 10);
+    assert_eq!(day["truncated"], true);
+    assert!(
+        day.to_string().len() < 24 * 1024,
+        "{} bytes",
+        day.to_string().len()
+    );
 }
 
 #[tokio::test]
@@ -738,4 +809,50 @@ async fn registration_sends_a_valid_manifest_and_learns_the_kernel_key() {
     assert_eq!(after.status().as_u16(), 200);
     let health = http.get(format!("{url}/health")).send().await.unwrap();
     assert_eq!(health.status().as_u16(), 200, "health needs no identity");
+}
+
+#[tokio::test]
+async fn a_chain_that_ended_restarts_only_on_activity_or_on() {
+    let h = harness().await;
+    h.call("checkins", json!({"quiet": false, "every_minutes": 10}))
+        .await;
+    h.call("log", json!({"text": "starting"})).await;
+    let mut t = at(14, 0);
+    for _ in 0..8 {
+        t += 600;
+        h.set_now(t);
+        h.tick().await;
+    }
+    // Changing the interval does not restart it, so no ninth check-in.
+    let changed = h.call("checkins", json!({"every_minutes": 30})).await;
+    assert_eq!(changed["checkins"]["next"], Value::Null);
+    h.set_now(t + 3600);
+    assert_eq!(h.tick().await["raised"], 0);
+    // "Start checking on me again" does, and answers what was open.
+    let on = h.call("checkins", json!({"on": true})).await;
+    assert!(!on["checkins"]["next"].is_null());
+    assert_eq!(on["checkins"]["due"], false);
+    assert_eq!(
+        h.retired(),
+        vec![json!({"subject": "body-double/owner/checkin"})]
+    );
+    let day = h.call("day", json!({})).await;
+    assert_eq!(day["checkins"], json!({"raised": 8, "answered": 8}));
+}
+
+#[tokio::test]
+async fn a_corrected_household_zone_reaches_people_who_never_chose_one() {
+    let h = harness().await;
+    h.call("log", json!({"text": "started"})).await;
+    assert_eq!(h.call("now", json!({})).await["timezone"], "UTC");
+    let mut cfg = h.app.cfg.clone();
+    cfg.timezone = "America/New_York".into();
+    drop(h);
+    let (_router, app) = build_app(cfg).unwrap();
+    let store = app.store.lock().unwrap();
+    assert_eq!(
+        store.plan("owner").unwrap().unwrap().timezone,
+        "",
+        "the plan keeps no copy of the household zone"
+    );
 }

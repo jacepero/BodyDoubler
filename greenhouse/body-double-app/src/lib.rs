@@ -16,8 +16,9 @@ pub mod store;
 pub mod time;
 pub mod tools;
 
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::extract::{Path, Query, State};
+use axum::http::{header, HeaderMap, HeaderValue};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use config::AppConfig;
@@ -27,6 +28,7 @@ use greenhouse_kernel::identity::{
     verify_app_request, Claims, IdentityError, IdentityPurpose, IdentitySubjectKind,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -41,7 +43,7 @@ pub const DB_FILE: &str = "body-double.sqlite3";
 /// The effect each tool needs. Unknown names are not tools.
 pub fn tool_effect(name: &str) -> Option<&'static str> {
     match name {
-        "now" | "day" | "export" => Some("read"),
+        "now" | "day" => Some("read"),
         "log" | "set_task" | "update_task" | "open_thread" | "close_thread" | "checkins" => {
             Some("write")
         }
@@ -92,9 +94,6 @@ pub fn manifest() -> Value {
             tool("day",
                 "Body double journal for one day (date YYYY-MM-DD, default today), for recaps. Mention moods only if asked.",
                 object(json!({"date": date}), &[])),
-            tool("export",
-                "Body double journal as a file to save (markdown or json; from/to dates optional).",
-                object(json!({"format": {"type": "string", "enum": ["markdown", "json"]}, "from": date, "to": date}), &[])),
             tool("log",
                 "Body double: record what the person says they are doing or feeling, in their own words (text), with a one-line summary. Mood only if clearly stated.",
                 object(json!({"text": text(2000), "summary": text(200), "mood": text(40)}), &["text"])),
@@ -239,6 +238,7 @@ pub fn build_app(cfg: AppConfig) -> Result<(Router, Arc<AppState>), String> {
         .route("/health", get(health))
         .route("/event", post(event))
         .route("/tools/{name}", post(call_tool))
+        .route("/export", get(export_file))
         .with_state(app.clone());
     Ok((router, app))
 }
@@ -315,8 +315,7 @@ async fn call_tool(
         let store = app.store.lock().unwrap();
         let result = match name.as_str() {
             "now" => tools::now(&store, &ctx, &args),
-            "day" => tools::day(&store, &ctx, &args),
-            _ => tools::export(&store, &ctx, &args),
+            _ => tools::day(&store, &ctx, &args),
         };
         return result.map(Json);
     }
@@ -336,6 +335,46 @@ async fn call_tool(
         app.retire(user).await;
     }
     Ok(Json(outcome.result))
+}
+
+/// The journal as a download, through the kernel's app proxy
+/// (`/apps/body-double/export?format=markdown|json&from=&to=`), for the
+/// person whose browser asks. A file, not a tool: no model context and no
+/// tool log, and it changes nothing.
+async fn export_file(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    let claims = require_identity(&app, &headers, IdentityPurpose::Data, Some("read"))?;
+    let args = Value::Object(
+        query
+            .into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect(),
+    );
+    let now = app.now();
+    let file = {
+        let store = app.store.lock().unwrap();
+        tools::export(&store, &app.ctx(&claims.u, now), &args)?
+    };
+    let disposition = format!("attachment; filename=\"{}\"", file.filename);
+    let mut response = file.content.into_response();
+    let h = response.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(file.content_type),
+    );
+    h.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition).map_err(|_| err(500, "bad file name"))?,
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
 }
 
 async fn run_tick(app: &AppState, args: &Value, now: i64) -> ApiResult<Value> {
@@ -417,7 +456,7 @@ mod tests {
     fn every_declared_tool_has_the_effect_the_router_enforces() {
         let m = manifest();
         let tools = m["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 9);
         for t in tools {
             let name = t["name"].as_str().unwrap();
             assert_eq!(t["effect"].as_str(), tool_effect(name), "{name}");

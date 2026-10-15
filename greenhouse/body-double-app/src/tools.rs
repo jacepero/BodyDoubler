@@ -15,10 +15,13 @@ const RECENT: usize = 5;
 const OPEN_THREADS_SHOWN: usize = 10;
 /// Paused tasks `now` lists.
 const PAUSED_SHOWN: usize = 5;
-/// Entries `day` returns.
-const DAY_ENTRIES: usize = 400;
+/// Entries `day` returns, the newest, and how much of each one's words.
+const DAY_ENTRIES: usize = 60;
+const DAY_TEXT: usize = 240;
+/// Tasks `day` lists.
+const DAY_TASKS: usize = 20;
 /// The largest export, in bytes.
-pub const EXPORT_MAX_BYTES: usize = 512 * 1024;
+pub const EXPORT_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Check-ins one tick raises at most (the rest wait for the next tick).
 pub const TICK_MAX: usize = 50;
 
@@ -196,7 +199,7 @@ pub fn plan_view(plan: &Plan, zone: &Zone, now: i64, notices: bool) -> Value {
         "on": plan.enabled,
         "every_minutes": plan.every_minutes,
         "quiet": plan.quiet.map(|(f, u)| format!("{}-{}", time::fmt_hhmm(f), time::fmt_hhmm(u))),
-        "timezone": plan.timezone,
+        "timezone": zone.name,
         "next": plan.next().map(|t| time::when(zone, t, now)),
         "next_ts": plan.next(),
         "due": plan.unanswered > 0,
@@ -221,7 +224,7 @@ impl Ctx<'_> {
         Ok(store
             .plan(self.user)
             .map_err(store_error)?
-            .unwrap_or_else(|| Plan::new(self.user, &self.cfg.defaults, &self.cfg.timezone)))
+            .unwrap_or_else(|| Plan::new(self.user, &self.cfg.defaults, "")))
     }
 
     pub fn zone(&self, plan: &Plan) -> Zone {
@@ -287,7 +290,7 @@ pub fn now(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError> {
         .map_err(store_error)?;
     Ok(json!({
         "now": time::stamp(&zone, now),
-        "timezone": plan.timezone,
+        "timezone": zone.name,
         "current_task": current.as_ref().map(|t| current_view(t, &zone, now)),
         "minutes_since_last_entry": last.map(|t| time::minutes_between(t, now)),
         "open_threads": threads.iter().take(OPEN_THREADS_SHOWN).map(|t| thread_view(t, &zone, now)).collect::<Vec<_>>(),
@@ -315,14 +318,21 @@ pub fn day(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError> {
         None => time::day_of(&zone, ctx.now),
     };
     let (from, to) = (time::day_start(&zone, day), time::day_start(&zone, day + 1));
-    let mut entries = store
-        .entries_between(ctx.user, from, to, DAY_ENTRIES + 1)
+    // Sized for a chat turn: the result goes into the model's context whole,
+    // on an 8,192-token runtime. The newest entries, each cut short, as the
+    // iOS recap took the day's lines.
+    let entries = store
+        .newest_entries_between(ctx.user, from, to, DAY_ENTRIES)
         .map_err(store_error)?;
-    let truncated = entries.len() > DAY_ENTRIES;
-    entries.truncate(DAY_ENTRIES);
-    let tasks = store
+    let count = store
+        .count_entries_between(ctx.user, from, to)
+        .map_err(store_error)?;
+    let earlier = (count - entries.len() as i64).max(0);
+    let mut tasks = store
         .tasks_touched(ctx.user, from, to)
         .map_err(store_error)?;
+    let more_tasks = tasks.len().saturating_sub(DAY_TASKS);
+    tasks.truncate(DAY_TASKS);
     let (opened, closed) = store
         .threads_between(ctx.user, from, to)
         .map_err(store_error)?;
@@ -334,26 +344,38 @@ pub fn day(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError> {
     Ok(json!({
         "date": time::iso_date(day),
         "label": time::date_label(day),
-        "timezone": plan.timezone,
+        "timezone": zone.name,
         "entries": entries.iter().map(|e| json!({
             "id": e.id,
             "time": time_of(e.at),
             "at_ts": e.at,
-            "text": e.text,
+            "text": cut(&e.text, DAY_TEXT),
             "summary": e.summary,
             "mood": e.mood,
             "task": e.task,
         })).collect::<Vec<_>>(),
+        "earlier": earlier,
         "tasks": tasks.iter().map(task_brief).collect::<Vec<_>>(),
+        "more_tasks": more_tasks,
         "threads_opened": opened.iter().map(|t| json!({"id": t.id, "note": t.note, "time": time_of(t.opened_at)})).collect::<Vec<_>>(),
         "threads_closed": closed.iter().map(|t| json!({"id": t.id, "note": t.note, "time": time_of(t.closed_at.unwrap_or(t.opened_at))})).collect::<Vec<_>>(),
-        "open_threads": open.iter().map(|t| json!({"id": t.id, "note": t.note})).collect::<Vec<_>>(),
+        "open_threads": open.iter().take(OPEN_THREADS_SHOWN).map(|t| json!({"id": t.id, "note": t.note})).collect::<Vec<_>>(),
+        "more_open_threads": open.len().saturating_sub(OPEN_THREADS_SHOWN),
         "checkins": {"raised": raised, "answered": answered},
-        "truncated": truncated,
+        "truncated": earlier > 0,
     }))
 }
 
-pub fn export(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError> {
+/// A journal file to download.
+pub struct Export {
+    pub filename: String,
+    pub content_type: &'static str,
+    pub content: String,
+}
+
+/// The journal as a file, for the download route (not a tool: a tool's
+/// result goes into the model's context whole).
+pub fn export(store: &Store, ctx: &Ctx, args: &Value) -> Result<Export, ApiError> {
     let args = Args::new(args, &["format", "from", "to"])?;
     let format = args
         .text("format", 10)?
@@ -404,7 +426,7 @@ pub fn export(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError>
         let doc = json!({
             "exported_at": time::iso_utc(ctx.now),
             "user": ctx.user,
-            "timezone": plan.timezone,
+            "timezone": zone.name,
             "from": from_day.map(time::iso_date),
             "to": to_day.map(time::iso_date),
             "entries": entries.iter().map(|e| json!({
@@ -437,18 +459,21 @@ pub fn export(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError>
         return Err(err(
             400,
             format!(
-                "the export would be {} KB, more than {} KB; give from and to to export a shorter span",
-                content.len() / 1024,
-                EXPORT_MAX_BYTES / 1024
+                "the export would be {} MB, more than {} MB; give from and to to export a shorter span",
+                content.len() / (1024 * 1024),
+                EXPORT_MAX_BYTES / (1024 * 1024)
             ),
         ));
     }
-    Ok(json!({
-        "format": format,
-        "filename": format!("body-double-{span_name}.{ext}"),
-        "entries": entries.len(),
-        "content": content,
-    }))
+    Ok(Export {
+        filename: format!("body-double-{span_name}.{ext}"),
+        content_type: if ext == "json" {
+            "application/json; charset=utf-8"
+        } else {
+            "text/markdown; charset=utf-8"
+        },
+        content,
+    })
 }
 
 fn markdown(
@@ -719,7 +744,9 @@ pub fn set_checkins(store: &mut Store, ctx: &Ctx, args: &Value) -> Result<Outcom
             plan.unanswered = 0;
         }
         Some(true) => {
-            turned_on = !plan.enabled;
+            // "Start checking on me again" also restarts a chain that ended
+            // after eight unanswered.
+            turned_on = !plan.enabled || plan.unanswered >= checkins::MAX_UNANSWERED;
             plan.enabled = true;
             if turned_on {
                 plan.unanswered = 0;
@@ -728,7 +755,10 @@ pub fn set_checkins(store: &mut Store, ctx: &Ctx, args: &Value) -> Result<Outcom
         None => {}
     }
     let zone = ctx.zone(&plan);
+    // A chain that ended after eight unanswered stays ended through other
+    // changes: only activity or on:true starts it again.
     let chain_changed = plan.enabled
+        && plan.unanswered < checkins::MAX_UNANSWERED
         && (turned_on
             || plan.every_minutes != was.every_minutes
             || plan.quiet != was.quiet
@@ -743,12 +773,13 @@ pub fn set_checkins(store: &mut Store, ctx: &Ctx, args: &Value) -> Result<Outcom
         plan.oneoff_at = Some(ctx.now + minutes * 60);
     }
     store.save_plan(&plan).map_err(store_error)?;
-    let retire = on == Some(false) && was.unanswered > 0;
-    if retire {
-        store
+    // Turning check-ins off, or back on after some went unanswered, answers
+    // the open ones and takes their notice down.
+    let retire = (on == Some(false) || (turned_on && was.unanswered > 0))
+        && store
             .answer_checkins(ctx.user, ctx.now)
-            .map_err(store_error)?;
-    }
+            .map_err(store_error)?
+            > 0;
     Ok(Outcome {
         result: json!({
             "checkins": plan_view(&plan, &zone, ctx.now, ctx.notices()),

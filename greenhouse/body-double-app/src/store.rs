@@ -257,6 +257,11 @@ fn activate(tx: &Transaction, task_id: i64, now: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Two task titles name the same task: any case, in any script.
+fn same_title(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
 fn task_in(conn: &Connection, user: &str, id: i64) -> rusqlite::Result<Option<Task>> {
     conn.query_row(
         &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE user_id = ?1 AND id = ?2"),
@@ -362,6 +367,25 @@ impl Store {
         Ok(rows)
     }
 
+    /// The newest `limit` entries in [from, to), oldest first.
+    pub fn newest_entries_between(
+        &self,
+        user: &str,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> StoreResult<Vec<Entry>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {ENTRY_COLUMNS} FROM entries e WHERE e.user_id = ?1 AND e.at >= ?2 AND e.at < ?3
+             ORDER BY e.at DESC, e.id DESC LIMIT ?4"
+        ))?;
+        let mut rows = stmt
+            .query_map(params![user, from, to, limit as i64], entry_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.reverse();
+        Ok(rows)
+    }
+
     pub fn count_entries_between(&self, user: &str, from: i64, to: i64) -> StoreResult<i64> {
         Ok(self.conn.query_row(
             "SELECT COUNT(*) FROM entries WHERE user_id = ?1 AND at >= ?2 AND at < ?3",
@@ -422,7 +446,7 @@ impl Store {
     pub fn set_task(&mut self, user: &str, title: &str, now: i64) -> StoreResult<Switched> {
         let tx = self.conn.transaction()?;
         if let Some(current) = active_in(&tx, user)? {
-            if current.title.to_lowercase() == title.to_lowercase() {
+            if same_title(&current.title, title) {
                 return Ok(Switched {
                     current,
                     paused: None,
@@ -432,14 +456,22 @@ impl Store {
             }
         }
         let paused = pause_active(&tx, user, now)?;
-        let existing: Option<i64> = tx
-            .query_row(
-                "SELECT id FROM tasks WHERE user_id = ?1 AND status = 'paused' AND lower(title) = lower(?2)
-                 ORDER BY updated_at DESC, id DESC LIMIT 1",
-                params![user, title],
-                |r| r.get(0),
-            )
-            .optional()?;
+        // Compared in Rust, not with SQLite's lower(), which folds ASCII only.
+        let existing: Option<i64> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, title FROM tasks WHERE user_id = ?1 AND status = 'paused'
+                 ORDER BY updated_at DESC, id DESC",
+            )?;
+            let paused = stmt
+                .query_map(params![user], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            paused
+                .into_iter()
+                .find(|(_, t)| same_title(t, title))
+                .map(|(id, _)| id)
+        };
         let (id, resumed) = match existing {
             Some(id) => {
                 activate(&tx, id, now)?;
@@ -724,6 +756,17 @@ mod tests {
             .unwrap();
         assert!(d.unchanged);
         assert_eq!(d.current.active_since, Some(9000));
+    }
+
+    #[test]
+    fn titles_match_in_any_case_and_script() {
+        let mut s = store();
+        let etude = s.set_task("owner", "Étude", 100).unwrap().current;
+        s.set_task("owner", "Laundry", 200).unwrap();
+        let again = s.set_task("owner", "étude", 300).unwrap();
+        assert!(again.resumed, "SQLite's lower() would not have matched É");
+        assert_eq!(again.current.id, etude.id);
+        assert!(s.set_task("owner", "ÉTUDE", 400).unwrap().unchanged);
     }
 
     #[test]
