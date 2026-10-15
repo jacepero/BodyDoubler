@@ -222,8 +222,9 @@ skipped:
   credential;
 - the app slot in `/var/lib/greenhouse/kernel/kernel.db`, the approved contract and the owner's
   grants;
-- the journal, `/var/lib/greenhouse/apps/body-double/body-double.sqlite3`. It is personal and
-  belongs on the passkey-unlocked tier-2 volume once the appliance has one (proposal, decision 4).
+- the journal, `/var/lib/greenhouse/apps/body-double/body-double.sqlite3`. It is personal; the
+  proposal recommends the passkey-unlocked tier-2 volume once the appliance has one (decision 4,
+  the owner's to answer).
   Until then it sits in `/var` with the other apps' state.
 
 A fresh appliance has no way yet to provision an app slot without a restore. That gap is the
