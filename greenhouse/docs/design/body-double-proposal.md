@@ -181,10 +181,12 @@ These are read from Greenhouse source, main at `d176a23` (2026-10-14).
      the memory switches say;
    - narration typed in chat is the person's own message and forms memories like any other.
 
-   A mood counts as sensitive only if the model flags it; SayLLM's word list has no common mood
-   words. So the journal can reach memories. The ways to keep it out:
-   - a Body double persona with universal and persona memories off. This stops memories, not
-     summaries;
+   SayLLM's word list (`SENSITIVE_WORDS` in `memory-formation.js`) catches a few distress words,
+   such as anxious, depressed, lonely and grieving, whatever the model says. Everyday moods like
+   tired, stressed, sad or frustrated count as sensitive only if the model flags them. So the
+   journal can reach memories. The ways to keep it out:
+   - a Body double persona with its Universal memories and Persona memories switches off ("Memory
+     enabled" governs only recall). This stops memories, not summaries;
    - private turns, which memory formation never reads. These stop both;
    - an instruction not to repeat entries word for word. This helps but guarantees nothing.
 8. **Where it shows.** **Recommended:**

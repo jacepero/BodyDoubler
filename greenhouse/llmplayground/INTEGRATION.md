@@ -401,7 +401,7 @@ the tools.
 | Task | General conversation |
 | Personality | Neutral (the instructions below already set the tone) |
 | Default reasoning | fast. Move it up if the fast tier proves unreliable at tool calls. |
-| Memory enabled | the owner's choice; off keeps the journal out of memories. SayLLM never stores a tool result. But what the person types in chat is stored and can form memories, and so can the assistant's replies, which repeat what `now` and `day` return. A memory may rest on the assistant's replies alone (`memory-formation.js`), and is universal by default. Summaries of the conversation are written whatever the memory switches say. Only private turns are never read. Leave the sensitive-topics switch off: moods are emotional states. |
+| Memory enabled | the owner's choice. It controls only whether this persona's chats recall memories (`chat-lifecycle.js`). To keep the journal out of memories, also untick the persona's **Universal memories** and **Persona memories** switches on its card under gear → Personas: memory formation checks those (`memory-formation.js`), and Universal is on by default. SayLLM never stores a tool result, but the person's chat messages and the assistant's replies, which repeat what `now` and `day` return, can both form memories. Conversation summaries are written either way; only private turns are never read. Leave the sensitive-topics switch off: moods are emotional states. |
 | Temperature | 0.6 (the iOS app's sampler) |
 
 Custom instructions:
