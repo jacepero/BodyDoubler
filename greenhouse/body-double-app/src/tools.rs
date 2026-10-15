@@ -15,11 +15,19 @@ const RECENT: usize = 5;
 const OPEN_THREADS_SHOWN: usize = 10;
 /// Paused tasks `now` lists.
 const PAUSED_SHOWN: usize = 5;
-/// Entries `day` returns, the newest, and how much of each one's words.
+/// What `day` may spend on its entries, in bytes of JSON: about 1,300 tokens,
+/// the iOS recap's budget. The newest come first; the rest are counted.
+const DAY_ENTRY_BYTES: usize = 5 * 1024;
+/// Entries `day` returns at most, however short they are.
 const DAY_ENTRIES: usize = 60;
-const DAY_TEXT: usize = 240;
-/// Tasks `day` lists.
-const DAY_TASKS: usize = 20;
+/// An entry in `day` is its summary, or else its words, cut to this (as the
+/// iOS recap took `summary ?? text.prefix(120)`).
+const DAY_TEXT: usize = 120;
+/// Tasks and loose ends `day` lists, and how much of a title or a note.
+const DAY_TASKS: usize = 10;
+const DAY_THREADS: usize = 5;
+const DAY_TITLE: usize = 60;
+const DAY_NOTE: usize = 80;
 /// The largest export, in bytes.
 pub const EXPORT_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Check-ins one tick raises at most (the rest wait for the next tick).
@@ -307,6 +315,30 @@ pub fn now(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError> {
     }))
 }
 
+/// An entry as `day` gives it: the time, the summary or else the words (cut),
+/// and the mood and task when there are any.
+fn day_entry(entry: &Entry, zone: &Zone) -> Value {
+    let said = entry.summary.as_deref().unwrap_or(&entry.text);
+    let mut v = json!({ "time": time::hhmm(zone, entry.at), "text": cut(said, DAY_TEXT) });
+    if let Some(mood) = &entry.mood {
+        v["mood"] = json!(mood);
+    }
+    if let Some(task) = &entry.task {
+        v["task"] = json!(cut(task, DAY_TITLE));
+    }
+    v
+}
+
+fn day_thread(thread: &Thread, at: i64, zone: &Zone) -> Value {
+    json!({ "id": thread.id, "note": cut(&thread.note, DAY_NOTE), "time": time::hhmm(zone, at) })
+}
+
+/// The newest `n` of a list kept oldest first, and how many were left out.
+fn newest<T>(items: &[T], n: usize) -> (&[T], usize) {
+    let left = items.len().saturating_sub(n);
+    (&items[left..], left)
+}
+
 pub fn day(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError> {
     let args = Args::new(args, &["date"])?;
     let plan = ctx.plan(store)?;
@@ -318,12 +350,25 @@ pub fn day(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError> {
         None => time::day_of(&zone, ctx.now),
     };
     let (from, to) = (time::day_start(&zone, day), time::day_start(&zone, day + 1));
-    // Sized for a chat turn: the result goes into the model's context whole,
-    // on an 8,192-token runtime. The newest entries, each cut short, as the
-    // iOS recap took the day's lines.
-    let entries = store
+    // Sized for a chat turn: the kernel puts the result into the model's
+    // context whole, on an 8,192-token runtime. The newest entries that fit a
+    // byte budget, each its summary or its words cut short, and counts of
+    // everything left out. A heavy day stays near 2,000 tokens.
+    let candidates = store
         .newest_entries_between(ctx.user, from, to, DAY_ENTRIES)
         .map_err(store_error)?;
+    let mut entries = Vec::new();
+    let mut spent = 0;
+    for entry in candidates.iter().rev() {
+        let view = day_entry(entry, &zone);
+        let size = view.to_string().len() + 1;
+        if !entries.is_empty() && spent + size > DAY_ENTRY_BYTES {
+            break;
+        }
+        spent += size;
+        entries.push(view);
+    }
+    entries.reverse();
     let count = store
         .count_entries_between(ctx.user, from, to)
         .map_err(store_error)?;
@@ -336,33 +381,29 @@ pub fn day(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError> {
     let (opened, closed) = store
         .threads_between(ctx.user, from, to)
         .map_err(store_error)?;
+    let (opened, more_opened) = newest(&opened, DAY_THREADS);
+    let (closed, more_closed) = newest(&closed, DAY_THREADS);
     let open = store.open_threads(ctx.user).map_err(store_error)?;
+    let more_open = open.len().saturating_sub(DAY_THREADS);
     let (raised, answered) = store
         .checkin_counts(ctx.user, from, to)
         .map_err(store_error)?;
-    let time_of = |t: i64| time::hhmm(&zone, t);
     Ok(json!({
         "date": time::iso_date(day),
         "label": time::date_label(day),
         "timezone": zone.name,
-        "entries": entries.iter().map(|e| json!({
-            "id": e.id,
-            "time": time_of(e.at),
-            "at_ts": e.at,
-            "text": cut(&e.text, DAY_TEXT),
-            "summary": e.summary,
-            "mood": e.mood,
-            "task": e.task,
-        })).collect::<Vec<_>>(),
+        "entries": entries,
         "earlier": earlier,
-        "tasks": tasks.iter().map(task_brief).collect::<Vec<_>>(),
+        "tasks": tasks.iter().map(|t| json!({"id": t.id, "title": cut(&t.title, DAY_TITLE), "status": t.status})).collect::<Vec<_>>(),
         "more_tasks": more_tasks,
-        "threads_opened": opened.iter().map(|t| json!({"id": t.id, "note": t.note, "time": time_of(t.opened_at)})).collect::<Vec<_>>(),
-        "threads_closed": closed.iter().map(|t| json!({"id": t.id, "note": t.note, "time": time_of(t.closed_at.unwrap_or(t.opened_at))})).collect::<Vec<_>>(),
-        "open_threads": open.iter().take(OPEN_THREADS_SHOWN).map(|t| json!({"id": t.id, "note": t.note})).collect::<Vec<_>>(),
-        "more_open_threads": open.len().saturating_sub(OPEN_THREADS_SHOWN),
+        "threads_opened": opened.iter().map(|t| day_thread(t, t.opened_at, &zone)).collect::<Vec<_>>(),
+        "more_threads_opened": more_opened,
+        "threads_closed": closed.iter().map(|t| day_thread(t, t.closed_at.unwrap_or(t.opened_at), &zone)).collect::<Vec<_>>(),
+        "more_threads_closed": more_closed,
+        "open_threads": open.iter().take(DAY_THREADS).map(|t| json!({"id": t.id, "note": cut(&t.note, DAY_NOTE)})).collect::<Vec<_>>(),
+        "more_open_threads": more_open,
         "checkins": {"raised": raised, "answered": answered},
-        "truncated": earlier > 0,
+        "truncated": earlier > 0 || more_tasks > 0 || more_opened > 0 || more_closed > 0 || more_open > 0,
     }))
 }
 

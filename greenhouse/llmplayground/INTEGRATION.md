@@ -31,7 +31,7 @@ Today's Export is the one control that is not a tool call (below).
 | id | Title | Shows | Calls |
 |---|---|---|---|
 | `bd-focus` | Focus | The current task, a live timer (`since_ts`, ticking every 15 s), a due check-in as a question about the current task ("Still on WGU assignment? 45m in."), the paused tasks, a "What are you doing?" box | Enter: `log {text}`. Switch: `set_task {title}`. Done (header): `update_task {task_id, status: "done"}`. A paused task: `update_task {task_id, status: "active"}` |
-| `bd-journal` | Today (`default: false`) | The day's entries, time, words and summary, newest last, as many as the card holds, "N earlier" above (it also counts the entries `day` left out: it returns the newest 60) | Export (header): fetches `/apps/body-double/export?format=markdown` through the kernel's proxy and saves the file. No tool call |
+| `bd-journal` | Today (`default: false`) | The day's entries, the time and what was said (the summary, or else the words cut short, as `day` gives them), newest last, as many as the card holds, "N earlier" above (it also counts the entries `day` left out: it returns the newest that fit a chat turn) | Export (header): fetches `/apps/body-double/export?format=markdown` through the kernel's proxy and saves the file. No tool call |
 | `bd-loose-ends` | Loose ends (`default: false`) | The open loose ends from `now`, "N more", a box to add one | `close_thread {thread_id}`, `open_thread {note}` |
 | `bd-checkins` | Check-ins (`default: false`) | On/off, every 15m/30m/45m/1h/1h 30m, the next one, quiet hours, the plan's zone if not this device's | `checkins {on}` or `checkins {every_minutes}`, each with `timezone` from `Intl.DateTimeFormat().resolvedOptions().timeZone` (sent again without it if the app cannot load that zone) |
 
@@ -46,7 +46,11 @@ anything typed while the call is out stays. A failed write puts the words back, 
 new was typed, and says why in the card's note line.
 
 Export fetches the file first, so a refusal (no `read`, the app down) is a note on the card, not a
-page of JSON. It then saves the file through a link on the card, under the name the app's
+page of JSON. It asks for `text/markdown`, so an expired sign-in answers 401 rather than its login
+page. It saves only an answer that carries the app's `content-disposition: attachment` and came
+without a redirect. Anything else, such as a login page after a redirect, gets "your sign-in has
+expired. Reload the page" and nothing is saved. The button is a plain word ("Export", class
+`ghost`), not a `more` link: SayLLM shows a `more` button on a narrow card as a bare "›". It then saves the file through a link on the card, under the name the app's
 `content-disposition` gives. The path sits beside SayLLM's own (`…/apps/llmplayground/` becomes
 `…/apps/body-double/export`), so it is same-origin, and SayLLM's `connect-src 'self'` allows it.
 The journal never passes through a tool, so it stays out of the chat model's context and the
@@ -275,7 +279,7 @@ After the Timers page rules (styles.css, Timers page block from 2026-10-14T02:33
 .bd-list > [hidden] { display: none; }
 .bd-entry { align-items: flex-start; }
 .bd-time { flex: none; width: 42px; padding-top: 1px; color: var(--t3); font-size: 12.5px; }
-.bd-text, .bd-entry .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-earlier { margin: 0; padding: 4px 0; color: var(--t3); font-size: 12.5px; }
 .bd-switch { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 13.5px; flex: none; }
 .bd-switch .sw[aria-checked="true"] { background: var(--violet); }
@@ -343,7 +347,7 @@ Asked for a recap of the day, read body-double__day and write four to six plain 
 ## Checked so far
 
 - `node --check public/body-double-widgets.js`; `node --test tests/body-double-widgets.test.js`:
-  32 pass (Node 22.22). Node 22 does not take a directory for `--test`; give the file, or a glob
+  34 pass (Node 22.22). Node 22 does not take a directory for `--test`; give the file, or a glob
   such as `node --test 'tests/*.test.js'`.
 - Every "Before" above was applied, exactly once each, to the files reconstructed from the owner's
   sessions (`widgets.js`, `apps.js`, `home.js`, `styles.css`, as of 2026-10-14) and to the verbatim
@@ -357,7 +361,10 @@ Asked for a recap of the day, read body-double__day and write four to six plain 
 - Export in Chromium (Playwright): a page at `/apps/llmplayground/` with SayLLM's own
   `content-security-policy`, the Today card, and a stand-in `/apps/body-double/export`. One click
   saved `body-double-2026-10-15.md` with the file's content, and the page stayed where it was. A
-  403 showed "Could not export: identity lacks 'read'" on the card.
+  403 showed "Could not export: identity lacks 'read'" on the card. Behind a stand-in for the
+  Authelia gate, with the session gone, the card said the sign-in had expired and saved nothing.
+  This held both when the gate answered 401 and when it redirected to its login page. At phone
+  widths (375 and 390 px, Home and the page) the button reads "Export".
 - Not checked: the cards in the real SayLLM. `scripts/preview.js` with
   `scripts/preview-fixture.json` (tool answers keyed `"body-double.now {}"`, `"body-double.day {}"`)
   would show them against the examples in `apps/body-double.md`.

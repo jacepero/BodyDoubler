@@ -87,23 +87,17 @@ export function focusView(now, nowMs = Date.now()) {
 }
 
 /**
- * The day's entries from `day`, oldest first so the newest is last, each
- * { id, time, text, summary }. With a limit, only the newest that fit, one
- * place kept for the "N earlier" line: { rows, earlier, total, truncated }.
- * `earlier` and `total` count the entries `day` itself left out (its
- * `earlier`: it returns the newest 60).
+ * The day's entries from `day`, as it gives them: oldest first so the newest
+ * is last, each { time, text }, where text is the entry's summary or else its
+ * words, cut short. With a limit, only the newest that fit, one place kept for
+ * the "N earlier" line: { rows, earlier, total, truncated }. `earlier` and
+ * `total` count the entries `day` itself left out (its `earlier`: it returns
+ * the newest that fit a chat turn).
  */
 export function journalRows(day, limit = Infinity) {
   const entries = (Array.isArray(day?.entries) ? day.entries : [])
     .filter((entry) => typeof entry?.text === "string")
-    .sort((a, b) => (Number(a.at_ts) || 0) - (Number(b.at_ts) || 0))
-    .map((entry) => ({
-      id: entry.id,
-      time: String(entry.time || ""),
-      text: entry.text,
-      // A summary that only repeats the words says nothing more.
-      summary: entry.summary && entry.summary !== entry.text ? String(entry.summary) : "",
-    }));
+    .map((entry) => ({ time: String(entry.time || ""), text: entry.text }));
   const truncated = day?.truncated === true;
   const left = Number.isInteger(day?.earlier) && day.earlier > 0 ? day.earlier : 0;
   const total = entries.length + left;
@@ -257,14 +251,26 @@ async function act(ctx, what, name, args, controls = [], done = () => {}) {
   return true;
 }
 
+const SIGNED_OUT = "Could not export: your sign-in has expired. Reload the page to sign in again.";
+
 /**
  * Downloads the journal as Markdown. Fetched first, so a refusal is a note on
  * the card rather than a page of JSON; then saved through a link on the card.
+ * Only the app's own file is saved: an expired sign-in can answer 200 with
+ * the login page (after a redirect), and that is not a journal.
  */
 async function downloadJournal(ctx, body, el, control) {
   control.disabled = true;
   try {
-    const response = await fetch(exportPath(globalThis.location?.pathname), { credentials: "same-origin" });
+    const response = await fetch(exportPath(globalThis.location?.pathname), {
+      credentials: "same-origin",
+      // Not a page: the sign-in gate answers 401 rather than its login page.
+      headers: { accept: "text/markdown" },
+    });
+    if (response.status === 401) {
+      ctx.note(SIGNED_OUT);
+      return;
+    }
     if (!response.ok) {
       let reason = `HTTP ${response.status}`;
       try {
@@ -274,6 +280,10 @@ async function downloadJournal(ctx, body, el, control) {
         // Not JSON: the status says it.
       }
       ctx.note(`Could not export: ${reason}`);
+      return;
+    }
+    if (response.redirected || !/^attachment\b/i.test(response.headers.get("content-disposition") || "")) {
+      ctx.note(SIGNED_OUT);
       return;
     }
     const url = URL.createObjectURL(await response.blob());
@@ -520,7 +530,7 @@ export function registerBodyDoubleWidgets({ registerWidget, el, button, input, i
       remember(body, ctx);
       // The whole journal, as a file: from the app's download route, never a
       // tool, so it stays out of the chat model's context.
-      const exporter = headButton("Export", "", () => void downloadJournal(ctx, body, el, exporter), "ghost more");
+      const exporter = headButton("Export", "", () => void downloadJournal(ctx, body, el, exporter), "ghost");
       exporter.title = "Download the whole journal as Markdown";
       ctx.actions(exporter);
       const { rows, earlier, total } = journalRows(day, journalLimit(ctx.span));
@@ -537,12 +547,7 @@ export function registerBodyDoubleWidgets({ registerWidget, el, button, input, i
       for (const entry of rows) {
         const text = el("span", "bd-text", entry.text);
         text.title = entry.text;
-        let summary = null;
-        if (entry.summary) {
-          summary = el("span", "muted", entry.summary);
-          summary.title = entry.summary;
-        }
-        const words = row("widget-row-name", text, summary);
+        const words = row("widget-row-name", text);
         list.append(row("widget-row bd-entry", el("span", "bd-time num", entry.time), words));
       }
       body.append(list);

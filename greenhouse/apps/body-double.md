@@ -83,8 +83,8 @@ open check-in, retires its notice and restarts the check-in clock. Reads do not 
 
 Times are the person's local time. A time on the same local day is `HH:MM`; an earlier one is
 `Thu 15 Oct 14:32`. The times a live display needs have a `*_ts` twin in Unix seconds: a task's
-`since`, an entry's `at`, a loose end's `opened` and `closed`, and the next check-in. `now.now`
-and the `time` fields in `day` have none.
+`since`, an entry's `at` (in `now` and `log`), a loose end's `opened` and `closed`, and the next
+check-in. `now.now` and the `time` fields in `day` have none.
 
 `now`:
 
@@ -146,13 +146,17 @@ picked up again. `unchanged` is true when it was already the current task.
 ```json
 {
   "date": "2026-10-15", "label": "Thu 15 Oct", "timezone": "America/New_York",
-  "entries": [{"id": 9, "time": "13:49", "at_ts": 1792086540, "text": "started refactor after standup",
-               "summary": null, "mood": null, "task": "Refactor IVR callback handler"}],
+  "entries": [{"time": "13:49", "text": "started refactor after standup",
+               "task": "Refactor IVR callback handler"},
+              {"time": "14:40", "text": "Switched to the WGU assignment", "mood": "tired",
+               "task": "WGU assignment"}],
   "earlier": 0,
-  "tasks": [{"id": 3, "title": "Refactor IVR callback handler", "status": "active"}],
+  "tasks": [{"id": 3, "title": "Refactor IVR callback handler", "status": "paused"}],
   "more_tasks": 0,
   "threads_opened": [{"id": 4, "note": "...", "time": "14:40"}],
+  "more_threads_opened": 0,
   "threads_closed": [{"id": 1, "note": "...", "time": "15:02"}],
+  "more_threads_closed": 0,
   "open_threads": [{"id": 4, "note": "..."}],
   "more_open_threads": 0,
   "checkins": {"raised": 3, "answered": 2},
@@ -161,14 +165,21 @@ picked up again. `unchanged` is true when it was already the current task.
 ```
 
 `day` is sized for a chat turn, because the kernel puts a tool result into the model's context
-whole, on an 8,192-token runtime:
-- `entries` are the day's newest 60, oldest first, each `text` cut to 240 characters;
-- `earlier` counts the day's entries left out, and `truncated` is true when there are any;
-- `tasks` are the 20 most recently touched that the day touched (logged against, created or
-  changed), and `more_tasks` counts the rest;
-- `open_threads` is the oldest ten still open, and `more_open_threads` counts the rest.
+whole, on an 8,192-token runtime. It follows the iOS recap, which took each entry's
+`summary ?? text.prefix(120)`:
+- each entry is its time, then its one-line summary or, without one, its words, cut to 120
+  characters. `mood` and `task` (cut to 60) appear only when the entry has them;
+- `entries` are the day's newest, oldest first, as many as fit 5 KB of JSON (about 1,300
+  tokens), at most 60. `earlier` counts the rest;
+- `tasks` are the ten most recently touched that the day touched (logged against, created or
+  changed), titles cut to 60;
+- `threads_opened` and `threads_closed` are the day's newest five each, and `open_threads` the
+  oldest five still open, notes cut to 80;
+- each `more_*` counts what its list left out, and `truncated` is true when anything was.
 
-A full heavy day comes to well under 24 KB.
+Measured: a busy day of 60 short entries with summaries is 3.3 KB, all 60 included. A day at
+every limit (2,000-character entries with 200-character summaries, moods and titles, 40 loose
+ends) is under 8 KB, about 2,000 tokens, with its newest 18 entries.
 
 `checkins`: `{"checkins": {...the same object as in now...}}`.
 
@@ -191,12 +202,16 @@ The answer is the file:
 
 The proxy relays all three. The file is at most 16 MiB; past that the route asks for a shorter
 `from`/`to`. Unknown query names and a bad `format` are a 400.
-- **Markdown:** a heading per day, then a line per entry (time, words, summary, mood, task), then
-  the tasks and loose ends. The person's text is escaped, so line breaks become spaces and
+- **Markdown:** a heading per day in the span, then a line per entry (time, words, summary, mood,
+  task), then all the tasks and loose ends. The person's text is escaped, so line breaks become spaces and
   Markdown and HTML syntax shows as written. A title such as `<img src=x onerror=…>` cannot run
   in a viewer.
-- **JSON:** every entry, task, loose end and check-in in the span, with UTC ISO-8601 times and
-  the person's own ids, plus their check-in settings.
+- **JSON:** the entries and check-ins in the span, and every task and loose end, with UTC
+  ISO-8601 times and the person's own ids, plus their check-in settings.
+
+`from` and `to` limit the entries (and, in JSON, the check-ins) only. Both formats always hold
+every task and loose end, whatever the span, as the iOS export did. A one-day file therefore still
+lists every task title and loose-end note the person has.
 
 It is not a tool. A tool's result goes into the model's context whole, and the kernel's tool
 audit keeps its arguments. A download does neither, and changes nothing.

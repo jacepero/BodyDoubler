@@ -91,8 +91,9 @@ These are read from Greenhouse source as of mid-October.
   "effectively never having happened". (Check-in notices carry none of the person's words, so a
   loose end opened in a private turn is at least not repeated into the kernel's notices.)
 - **The kernel does not cut tool results.** A tool's result goes into the model's context whole.
-  So `day` returns a chat-sized day: the newest 60 entries, 240 characters each, with counts of
-  what it left out. The whole journal is a download, not a tool.
+  So `day` returns a chat-sized day, as the iOS recap did: each entry's summary or its first 120
+  characters, the newest that fit 5 KB, with counts of what it left out. A day at every limit stays
+  under 8 KB, about 2,000 tokens. The whole journal is a download, not a tool.
 - **Tool schemas cost context in every turn, and SayLLM budgets for less.** The kernel offers
   every callable tool in every chat turn, with no relevance filtering. Body Double's eight
   people-facing schemas come to about 2.9 KB in the kernel's wire form (`[body-double] `

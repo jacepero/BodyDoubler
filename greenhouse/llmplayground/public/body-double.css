@@ -25,7 +25,7 @@
 .bd-list > [hidden] { display: none; }
 .bd-entry { align-items: flex-start; }
 .bd-time { flex: none; width: 42px; padding-top: 1px; color: var(--t3); font-size: 12.5px; }
-.bd-text, .bd-entry .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-earlier { margin: 0; padding: 4px 0; color: var(--t3); font-size: 12.5px; }
 .bd-switch { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 13.5px; flex: none; }
 .bd-switch .sw[aria-checked="true"] { background: var(--violet); }

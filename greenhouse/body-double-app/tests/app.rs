@@ -802,36 +802,85 @@ async fn the_markdown_export_shows_the_persons_text_and_never_runs_it() {
 #[tokio::test]
 async fn the_day_is_sized_for_a_chat_turn() {
     let h = harness().await;
+    // A day at every limit: the longest words, summaries, moods and titles,
+    // a new task every five entries, and forty loose ends opened.
     for i in 0..70 {
         h.set_now(at(8, 0) + i * 60);
+        if i % 5 == 0 {
+            h.call(
+                "set_task",
+                json!({"title": format!("task {i} {}", "t".repeat(190))}),
+            )
+            .await;
+        }
         h.call(
             "log",
-            json!({"text": format!("entry {i}: {}", "x".repeat(400))}),
+            json!({
+                "text": format!("entry {i}: {}", "x".repeat(1990)),
+                "summary": format!("summary {i}: {}", "s".repeat(185)),
+                "mood": "m".repeat(40),
+            }),
+        )
+        .await;
+    }
+    for i in 0..40 {
+        let opened = h
+            .call(
+                "open_thread",
+                json!({"note": format!("loose end {i}: {}", "n".repeat(280))}),
+            )
+            .await;
+        if i % 2 == 0 {
+            let id = opened["thread"]["id"].clone();
+            h.call("close_thread", json!({"thread_id": id})).await;
+        }
+    }
+    let day = h.call("day", json!({})).await;
+    let bytes = day.to_string().len();
+    assert!(
+        bytes < 8 * 1024,
+        "{bytes} bytes, about {} tokens",
+        bytes / 4
+    );
+    let entries = day["entries"].as_array().unwrap();
+    assert!(entries.len() >= 10, "{} entries", entries.len());
+    let last = entries.last().unwrap();
+    assert!(
+        last["text"].as_str().unwrap().starts_with("summary 69:"),
+        "the newest, as its summary"
+    );
+    assert_eq!(last["text"].as_str().unwrap().chars().count(), 120);
+    assert_eq!(last["task"].as_str().unwrap().chars().count(), 60);
+    assert!(last.get("at_ts").is_none() && last.get("id").is_none());
+    assert_eq!(day["earlier"], 70 - entries.len());
+    assert_eq!(day["tasks"].as_array().unwrap().len(), 10);
+    assert_eq!(day["more_tasks"], 4);
+    assert_eq!(day["threads_opened"].as_array().unwrap().len(), 5);
+    assert_eq!(day["more_threads_opened"], 35);
+    assert_eq!(day["threads_closed"].as_array().unwrap().len(), 5);
+    assert_eq!(day["more_threads_closed"], 15);
+    assert_eq!(day["open_threads"].as_array().unwrap().len(), 5);
+    assert_eq!(day["more_open_threads"], 15);
+    assert_eq!(day["truncated"], true);
+
+    // An ordinary busy day: short narration, one-line summaries. Most of it
+    // fits, the newest last.
+    let h = harness().await;
+    h.call("set_task", json!({"title": "Inbox"})).await;
+    for i in 0..60 {
+        h.set_now(at(8, 0) + i * 600);
+        h.call(
+            "log",
+            json!({"text": format!("replying to thread {i} about the schema review"), "summary": format!("Email {i}")}),
         )
         .await;
     }
     let day = h.call("day", json!({})).await;
     let entries = day["entries"].as_array().unwrap();
-    assert_eq!(entries.len(), 60);
-    assert!(
-        entries[59]["text"]
-            .as_str()
-            .unwrap()
-            .starts_with("entry 69:"),
-        "the newest"
-    );
-    assert!(entries[0]["text"]
-        .as_str()
-        .unwrap()
-        .starts_with("entry 10:"));
-    assert_eq!(entries[0]["text"].as_str().unwrap().chars().count(), 240);
-    assert_eq!(day["earlier"], 10);
-    assert_eq!(day["truncated"], true);
-    assert!(
-        day.to_string().len() < 24 * 1024,
-        "{} bytes",
-        day.to_string().len()
-    );
+    assert_eq!(entries.len(), 60, "all of it: {}", day.to_string().len());
+    assert_eq!(entries[59]["text"], "Email 59");
+    assert_eq!(day["earlier"], 0);
+    assert_eq!(day["truncated"], false);
 }
 
 #[tokio::test]

@@ -25,14 +25,17 @@ const NOW = {
 };
 const DAY = {
   date: "2026-10-15", label: "Thu 15 Oct", timezone: "America/New_York",
+  // Oldest first; each its summary or else its words, cut short.
   entries: [
-    { id: 11, time: "14:40", at_ts: 1792089600, text: "switching to the WGU assignment", summary: "Switched to the WGU assignment", mood: null, task: "WGU assignment" },
-    { id: 9, time: "13:49", at_ts: 1792086540, text: "started refactor after standup", summary: null, mood: null, task: "Refactor IVR callback handler" },
-    { id: 10, time: "14:32", at_ts: 1792089120, text: "lunch", summary: "lunch", mood: null, task: null },
+    { time: "13:49", text: "started refactor after standup", task: "Refactor IVR callback handler" },
+    { time: "14:32", text: "lunch" },
+    { time: "14:40", text: "Switched to the WGU assignment", task: "WGU assignment" },
   ],
-  tasks: [{ id: 3, title: "Refactor IVR callback handler", status: "active" }],
-  threads_opened: [], threads_closed: [], open_threads: [],
   earlier: 0,
+  tasks: [{ id: 3, title: "Refactor IVR callback handler", status: "active" }],
+  more_tasks: 0,
+  threads_opened: [], more_threads_opened: 0, threads_closed: [], more_threads_closed: 0,
+  open_threads: [], more_open_threads: 0,
   checkins: { raised: 3, answered: 2 },
   truncated: false,
 };
@@ -228,12 +231,15 @@ test("Focus shows the current task, how long, and a due check-in as a question a
 
 test("Today lists the day oldest first, so the newest is last, and keeps what fits", () => {
   const { rows, earlier, total } = journalRows(DAY);
-  assert.deepEqual(rows.map((row) => row.time), ["13:49", "14:32", "14:40"]);
-  assert.deepEqual(rows.map((row) => row.summary), ["", "", "Switched to the WGU assignment"], "no summary, or one that repeats the words, adds nothing");
+  assert.deepEqual(rows, [
+    { time: "13:49", text: "started refactor after standup" },
+    { time: "14:32", text: "lunch" },
+    { time: "14:40", text: "Switched to the WGU assignment" },
+  ], "in day's order, oldest first");
   assert.equal(earlier, 0);
   assert.equal(total, 3);
 
-  const many = { entries: Array.from({ length: 12 }, (_, i) => ({ id: i, time: `09:${String(i).padStart(2, "0")}`, at_ts: 1000 + i, text: `entry ${i}` })) };
+  const many = { entries: Array.from({ length: 12 }, (_, i) => ({ time: `09:${String(i).padStart(2, "0")}`, text: `entry ${i}` })) };
   const cut = journalRows(many, 5);
   assert.deepEqual(cut.rows.map((row) => row.text), ["entry 8", "entry 9", "entry 10", "entry 11"], "the newest, with a line kept for the rest");
   assert.equal(cut.earlier, 8);
@@ -505,13 +511,13 @@ test("without write grants the cards only show", () => {
 
 // ---- Today, Loose ends, Check-ins ---------------------------------------------------------
 
-test("Today shows time, words and summary, newest last, fitted to the card", () => {
+test("Today shows the time and what was said, newest last, fitted to the card", () => {
   const { registry, dom } = setup();
   const ctx = fakeCtx({ span: [4, 4] });
   const body = show(registry, dom, "bd-journal", DAY, ctx);
   const rows = all(body, byClass("bd-entry"));
   assert.deepEqual(rows.map((row) => text(find(row, byClass("bd-time")))), ["13:49", "14:32", "14:40"]);
-  assert.equal(text(find(rows[2], byClass("muted"))), "Switched to the WGU assignment");
+  assert.equal(text(find(rows[2], byClass("bd-text"))), "Switched to the WGU assignment");
   assert.equal(ctx.sub, "3 entries");
   const earlier = find(body, byClass("bd-earlier"));
   assert.equal(earlier.hidden, true, "nothing earlier to count");
@@ -559,6 +565,7 @@ test("Today: Export downloads the journal from the app's route, not a tool", asy
     await settle();
     assert.deepEqual(fetched.map(([url]) => url), ["/apps/body-double/export?format=markdown"]);
     assert.equal(fetched[0][1].credentials, "same-origin");
+    assert.equal(fetched[0][1].headers.accept, "text/markdown", "so a sign-in gate answers 401, not its login page");
   });
   assert.deepEqual(downloads, [{ href: "blob:journal", download: "body-double-2026-10-15.md", inPage: true }]);
   assert.equal(find(body, (node) => node.tag === "a"), null, "the link is gone once used");
@@ -582,6 +589,40 @@ test("Today: a refused export says why on the card", async () => {
     await settle();
   });
   assert.equal(ctx.notes.at(-1), "Could not export: network down");
+});
+
+test("Today: an expired sign-in is never saved as the journal", async () => {
+  const { registry, dom } = setup();
+  const ctx = fakeCtx({ span: [4, 4] });
+  show(registry, dom, "bd-journal", DAY, ctx);
+  const signedOut = "Could not export: your sign-in has expired. Reload the page to sign in again.";
+  const loginPage = {
+    ok: true, status: 200, redirected: true,
+    headers: { get: (name) => (name === "content-type" ? "text/html" : null) },
+    blob: async () => "<html>Sign in</html>",
+  };
+  const noAttachment = { ...loginPage, redirected: false };
+  const unauthorized = { ok: false, status: 401, json: async () => { throw new Error("not JSON"); }, headers: { get: () => null } };
+  for (const answer of [loginPage, noAttachment, unauthorized]) {
+    downloads.length = 0;
+    await withDownload(answer, async () => {
+      click(ctx.head[0]);
+      await settle();
+    });
+    assert.deepEqual(downloads, [], "nothing saved");
+    assert.equal(ctx.notes.at(-1), signedOut);
+    assert.equal(ctx.head[0].disabled, false);
+  }
+});
+
+test("Today: Export is a word, not the chevron of a link to more", () => {
+  const { registry, dom } = setup();
+  const ctx = fakeCtx({ span: [3, 2] });
+  show(registry, dom, "bd-journal", DAY, ctx);
+  const [exporter] = ctx.head;
+  // SayLLM hides the label of a .more button on a narrow card and draws "›".
+  assert.doesNotMatch(exporter.className, /\bmore\b/);
+  assert.equal(text(exporter), "Export");
 });
 
 test("Loose ends: close one, or add one", async () => {
