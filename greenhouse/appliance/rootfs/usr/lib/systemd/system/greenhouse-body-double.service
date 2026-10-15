@@ -1,0 +1,62 @@
+# Egress confinement for this unit is enforced by nftables `socket cgroupv2`
+# against the systemd-managed set declared in NFTSet= below (see
+# deploy/body-double/egress.nft): the kernel on loopback only. systemd's
+# IPAddressAllow=/IPAddressDeny= are not used, as for the other Greenhouse
+# services.
+#
+# Ordering is fail-closed: without the set the cgroup cannot be enrolled and the
+# service would run unconfined, so it must not start without nftables. The
+# kernel is wanted, never required: the app retries registration until the
+# kernel answers.
+#
+# The app holds no secrets and runs no model. The journal is personal: it lives
+# in the state directory below, readable by this app's user only.
+
+[Unit]
+Description=Greenhouse body double app
+Documentation=https://github.com/jacepero/greenhouse
+After=network-online.target nftables.service greenhouse-kernel.service
+Wants=network-online.target greenhouse-kernel.service
+Requires=nftables.service
+
+[Service]
+Type=simple
+User=greenhouse-body-double
+Group=greenhouse-body-double
+UMask=0077
+
+WorkingDirectory=/var/lib/greenhouse/apps/body-double
+StateDirectory=greenhouse/apps/body-double
+StateDirectoryMode=0700
+Environment=GREENHOUSE_KERNEL_URL=http://127.0.0.1:4000
+Environment=GREENHOUSE_APP_PORT=4107
+Environment=GREENHOUSE_BODY_DOUBLE_CONFIG=/etc/greenhouse/apps/body-double/config.json
+Environment=GREENHOUSE_BODY_DOUBLE_STATE_DIR=/var/lib/greenhouse/apps/body-double
+LoadCredential=registration.credential:/etc/greenhouse/apps/body-double/registration.credential
+ExecStart=/opt/greenhouse/bin/greenhouse-body-double
+
+Restart=always
+RestartSec=5s
+TimeoutStopSec=20s
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+NFTSet=cgroup:inet:greenhouse_egress:body_double_cgroups
+ReadWritePaths=/var/lib/greenhouse/apps/body-double
+UnsetEnvironment=KERNEL_MASTER_KEY KERNEL_MASTER_KEY_FILE KERNEL_DB REGISTRATION_TOKEN GREENHOUSE_SERVICE_TOKEN
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=greenhouse-body-double
+
+[Install]
+WantedBy=multi-user.target

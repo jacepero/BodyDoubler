@@ -1,0 +1,37 @@
+/* Reference copy of the Body double rules for public/styles.css (INTEGRATION.md).
+   Not served and not loaded: STATIC_ASSETS does not list it. The first block goes
+   after the Timers page rules; the phone rule goes inside the single
+   @media (max-width: 860px) block (tests/product-surface.test.js counts it). */
+
+/* Body double (body-double-widgets.js): the current task and its timer, a box to
+   say what you are doing, today's journal, loose ends and check-ins. Everything
+   else on these cards is Home's own: .widget-row, .empty-state, .btn, .sw,
+   .segmented, .tp-input, .icon-btn. */
+.bd-due { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; padding: 6px 10px; border-radius: 9px; flex: none;
+  background: var(--violet-bg); color: var(--violet); font-size: 13px; font-weight: 600; }
+.bd-due .ic { font-size: 15px; }
+.bd-now { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin-top: 10px; flex: none; }
+.bd-task { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-task.bd-none { color: var(--t3); font-weight: 500; }
+.bd-elapsed { font-family: "Inter Display", "Inter", sans-serif; font-size: clamp(28px, 12cqi, 52px); font-weight: 300; line-height: 1.05; letter-spacing: -.02em; }
+.bd-meta { color: var(--t3); font-size: 12.5px; }
+.bd-paused { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; color: var(--t3); font-size: 12.5px; flex: none; }
+.bd-paused-name { color: var(--t2); }
+.bd-say { display: flex; gap: 8px; margin-top: auto; padding-top: 10px; flex: none; }
+.bd-say input.tp-input { flex: 1; min-width: 0; height: 32px; }
+.bd-list { margin-top: 8px; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.bd-list > [hidden] { display: none; }
+.bd-entry { align-items: flex-start; }
+.bd-time { flex: none; width: 42px; padding-top: 1px; color: var(--t3); font-size: 12.5px; }
+.bd-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-earlier { margin: 0; padding: 4px 0; color: var(--t3); font-size: 12.5px; }
+.bd-switch { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 13.5px; flex: none; }
+.bd-switch .sw[aria-checked="true"] { background: var(--violet); }
+.bd-switch .sw[aria-checked="true"]::after { background: var(--surface); }
+.bd-every { align-self: flex-start; max-width: 100%; flex-wrap: wrap; margin: 10px 0 4px; }
+.bd-every .seg { padding: 0 9px; }
+
+/* Inside @media (max-width: 860px): 16px, or a phone zooms the page to type. */
+@media (max-width: 860px) {
+  .bd-say input.tp-input { height: 40px; font-size: 16px; }
+}

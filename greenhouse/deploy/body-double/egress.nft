@@ -1,0 +1,19 @@
+# Additions to table inet greenhouse_egress for the body double app
+# (deploy/body-double.md). install-body-double.sh merges the set into the table
+# and the rules into chain output, and adds the same to the running ruleset
+# with `nft add` (a reload would empty the running services' cgroup sets).
+# systemd fills the set through the unit's NFTSet=.
+#
+# The app may reach the kernel on loopback and nothing else: no name lookups,
+# no public web, never the LAN or the tailnet. It originates calls only to the
+# kernel (registration, /api/notify, /api/notify/retire). The kernel's calls to
+# the app on 127.0.0.1:4107 are inbound, and their replies are established.
+#
+#     set body_double_cgroups {
+#         type cgroupsv2
+#         comment "systemd-managed greenhouse-body-double.service cgroups"
+#     }
+#
+socket cgroupv2 level 2 @body_double_cgroups ct state established,related accept
+socket cgroupv2 level 2 @body_double_cgroups ip daddr 127.0.0.1 tcp dport 4000 accept
+socket cgroupv2 level 2 @body_double_cgroups counter drop
