@@ -2,7 +2,7 @@
 //
 // iOS gave the July app no background process, so it scheduled a chain of
 // the next eight notifications and rebuilt the chain whenever the person was
-// active. Greenhouse calls checkin_tick every minute instead (an approved
+// active. Greenhouse calls checkin_tick every five minutes instead (an approved
 // manifest schedule), and the plan below decides who is due. The rules are
 // the same: activity restarts the clock, quiet hours move a check-in to their
 // end, and eight unanswered in a row stop the chain until the person is back.

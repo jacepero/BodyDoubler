@@ -410,6 +410,8 @@ export function registerBodyDoubleWidgets({ registerWidget, el, button, input, i
     span: { min: [3, 2], max: [6, 8], default: [4, 4] },
     legacy: { large: [4, 6] },
     refreshMs: 120_000,
+    // On the Body double page; Home gets it from Add widgets.
+    default: false,
     load: (ctx) => read(ctx, "day"),
     render(day, body, ctx) {
       remember(body, ctx);
@@ -445,6 +447,8 @@ export function registerBodyDoubleWidgets({ registerWidget, el, button, input, i
     span: { min: [3, 2], max: [6, 6], default: [4, 3] },
     legacy: { large: [4, 3] },
     refreshMs: 60_000,
+    // On the Body double page; Home gets it from Add widgets.
+    default: false,
     load: (ctx) => read(ctx, "now"),
     render(now, body, ctx) {
       remember(body, ctx);

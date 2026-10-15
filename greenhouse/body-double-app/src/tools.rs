@@ -19,7 +19,7 @@ const PAUSED_SHOWN: usize = 5;
 const DAY_ENTRIES: usize = 400;
 /// The largest export, in bytes.
 pub const EXPORT_MAX_BYTES: usize = 512 * 1024;
-/// Check-ins one tick raises at most (the rest wait a minute).
+/// Check-ins one tick raises at most (the rest wait for the next tick).
 pub const TICK_MAX: usize = 50;
 
 pub fn store_error(e: StoreError) -> ApiError {

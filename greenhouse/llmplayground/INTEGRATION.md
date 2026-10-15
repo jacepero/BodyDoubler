@@ -26,8 +26,8 @@ every Body double card on screen reloads, so a line said on Focus shows in Today
 | id | Title | Shows | Calls |
 |---|---|---|---|
 | `bd-focus` | Focus | The current task, a live timer (`since_ts`, ticking every 15 s), "Check-in due" in the notice's words, the paused tasks, a "What are you doing?" box | Enter: `log {text}`. Switch: `set_task {title}`. Done (header): `update_task {task_id, status: "done"}`. A paused task: `update_task {task_id, status: "active"}` |
-| `bd-journal` | Today | The day's entries, time, words and summary, newest last, as many as the card holds, "N earlier" above | none |
-| `bd-loose-ends` | Loose ends | The open loose ends from `now`, "N more", a box to add one | `close_thread {thread_id}`, `open_thread {note}` |
+| `bd-journal` | Today (`default: false`) | The day's entries, time, words and summary, newest last, as many as the card holds, "N earlier" above | none |
+| `bd-loose-ends` | Loose ends (`default: false`) | The open loose ends from `now`, "N more", a box to add one | `close_thread {thread_id}`, `open_thread {note}` |
 | `bd-checkins` | Check-ins (`default: false`) | On/off, every 15m/30m/45m/1h/1h 30m, the next one, quiet hours, the plan's zone if not this device's | `checkins {on}` or `checkins {every_minutes}`, each with `timezone` from `Intl.DateTimeFormat().resolvedOptions().timeZone` (sent again without it if the app cannot load that zone) |
 
 Icons and the tint are existing ones: `persona`, `report`, `pin`, `clock` (plus `check`, `bell`,
@@ -324,7 +324,7 @@ Asked for a recap of the day, read body-double__day and write four to six plain 
   quotes of `app.js` and `src/http.js`. Then, in Node with stand-ins for `dom.js` and `icons.js`:
   `widgets.js`, `apps.js` and `home.js` load; the four cards register after Home's own; Focus, Loose
   ends and Check-ins are offered with `body-double.now`, Today with `body-double.day`, none without;
-  a new person's default Home gets Focus, Today and Loose ends, not Check-ins;
+  a new person's default Home gets Focus only (proposal decision 8), and the other three are on the page and in Add widgets;
   `widgetSpan(widget, "large")` gives the page spans above; `availableApps` shows the rail entry only
   with `body-double.now`; every page's widgets exist; `styles.css` still has one
   `max-width: 860px` block, with the new rule inside it, and its braces balance.
@@ -334,9 +334,10 @@ Asked for a recap of the day, read body-double__day and write four to six plain 
 
 ## Open points
 
-- The minute tick (`checkins.tick`) writes one audited call a minute. The owner's Activity card lists
-  recent scheduled calls, so it will mostly show "Body double: checkins.tick". That is a kernel and
-  app question (how often to tick, whether Activity lists no-op runs), not a SayLLM edit.
+- The tick (`checkins.tick`, every five minutes) writes one audited call each time. The owner's
+  Activity card lists recent scheduled calls, so "Body double: checkins.tick" will appear there
+  beside Home Assistant's house check. Whether Activity should hide no-op runs is a kernel and
+  SayLLM question, not part of this change.
 - Check-in notices reach only the owner, in SayLLM, the next time it is open (apps/body-double.md,
   "Who sees it"). Everyone else sees a due check-in on Focus and the assistant sees it in `now`.
 - The tint (violet) and the icons are choices for the owner to confirm. `persona`, `report`, `pin`

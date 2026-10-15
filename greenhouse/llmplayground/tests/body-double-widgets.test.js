@@ -277,8 +277,11 @@ test("four cards register under Home's rules", () => {
     assert.equal(typeof widget.render, "function");
   }
   assert.deepEqual(registry.get("bd-focus").needs, ["body-double.now"]);
-  assert.equal(registry.get("bd-checkins").default, false, "not on a new person's Home");
+  // Only Focus is on a new person's Home; the rest are on the Body double page.
   assert.equal(registry.get("bd-focus").default, undefined);
+  for (const id of ["bd-journal", "bd-loose-ends", "bd-checkins"]) {
+    assert.equal(registry.get(id).default, false, `${id}: not on a new person's Home`);
+  }
 });
 
 test("each card loads with one read", async () => {
