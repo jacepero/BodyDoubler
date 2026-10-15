@@ -208,6 +208,13 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_example_is_valid() {
+        let s = parse_file_config(include_str!("../../deploy/body-double/config.example.json"))
+            .unwrap();
+        assert_eq!(s.notices_for.as_deref(), Some("owner"));
+    }
+
+    #[test]
     fn only_the_zone_is_required() {
         let s =
             parse_file_config(r#"{"version":"greenhouse-body-double-config-v1","timezone":"UTC"}"#)

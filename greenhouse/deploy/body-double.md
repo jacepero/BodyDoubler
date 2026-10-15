@@ -13,7 +13,7 @@ Behaviour: [`apps/body-double.md`](../apps/body-double.md). The owner's decision
 
 The app holds no secrets and runs no model. Its only calls are to the kernel: registration,
 `/api/notify` and `/api/notify/retire`. The kernel calls it for tools and for the check-in
-schedule.
+schedule, and its proxy relays a person's journal download (`/apps/body-double/export`).
 
 ## Before the first install
 
@@ -40,7 +40,8 @@ The installer:
 - creates the user `greenhouse-body-double`, installs the binary into `/opt/greenhouse/bin/` and
   restores its SELinux label, and creates `/etc/greenhouse/apps/body-double/config.json` from
   `config.example.json` if there is none (zone `America/New_York`, notices for `owner`, check-ins
-  every 45 minutes, quiet 22:00–08:00);
+  every 45 minutes, quiet 22:00–08:00). `notices_for` names one person, the owner's user id; the
+  app refuses a list;
 - adds the `body_double_cgroups` egress set and rules to `greenhouse-production-egress.nft` (a
   backup is kept) and to the running ruleset with `nft add`. Those rules allow the kernel only;
 - provisions the app's kernel slot (`--endpoint http://127.0.0.1:4107`) and starts the app.
@@ -51,7 +52,7 @@ restarts the app. Keep the old binary first, as the other deploys do
 
 On start the app logs `internal app API on http://127.0.0.1:4107`, then `registered with kernel`.
 Registering creates a **pending contract**:
-- ten tools: `now`, `day`, `export` (read); `log`, `set_task`, `update_task`, `open_thread`,
+- nine tools: `now`, `day` (read); `log`, `set_task`, `update_task`, `open_thread`,
   `close_thread`, `checkins` (write); `checkin_tick` (command, scheduled only);
 - the schedule `checkins.tick`, cron `*/5 * * * *`, action `checkin_tick`;
 - notify `in-app`, category `body-double-checkin`, sensitivity `private`;
@@ -72,9 +73,11 @@ greenhousectl grants set owner body-double --effect read --effect write --operat
 ```
 
 `--effect` is repeated once per effect, and `grants set` sets the effects named. Grants are not
-cumulative: `read` offers `now`, `day` and `export`; `write` offers the six write tools. Nobody
-needs `command`: the scheduler calls `checkin_tick` as `system:scheduler`, and the app refuses
-any other caller. Grant other people `read` and `write` only when they ask.
+cumulative: `read` offers `now` and `day` and allows the journal download; `write` offers the six
+write tools. Nobody needs `command`: the scheduler calls `checkin_tick` as `system:scheduler`,
+and the app refuses any other caller. The kernel would offer `checkin_tick` in chat to anyone
+granted `command`, so grant it to nobody. Grant other people `read` and `write` only when they
+ask.
 
 For check-in notices to show in SayLLM, `body-double-checkin` must be on its shown categories
 (`llmplayground/INTEGRATION.md`).
@@ -134,7 +137,10 @@ that would put entries in someone's journal or raise a real check-in.
    ```
 
    Rows with `schedule:checkins.tick`, `ok` 1, one every five minutes since the approval. While nobody has
-   used the app nobody is due, so nothing is raised.
+   used the app nobody is due, so nothing is raised. An `ok` 0 row is a tick that could not send
+   the owner's notice or record a check-in. The app's log says which
+   (`journalctl -u greenhouse-body-double -o cat | grep "check-in tick"`), and the next tick tries
+   again.
 
 ## Backups and the journal
 

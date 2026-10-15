@@ -26,11 +26,12 @@ All four need the person to be able to call `body-double.now` (Today: `body-doub
 without a grant is offered them. Each control is one direct tool call, made only when
 `ctx.can("body-double.<tool>")` is true; without write grants the cards only show. After a write,
 every Body double card on screen reloads, so a line said on Focus shows in Today at once.
+Today's Export is the one control that is not a tool call (below).
 
 | id | Title | Shows | Calls |
 |---|---|---|---|
-| `bd-focus` | Focus | The current task, a live timer (`since_ts`, ticking every 15 s), "Check-in due" in the notice's words, the paused tasks, a "What are you doing?" box | Enter: `log {text}`. Switch: `set_task {title}`. Done (header): `update_task {task_id, status: "done"}`. A paused task: `update_task {task_id, status: "active"}` |
-| `bd-journal` | Today (`default: false`) | The day's entries, time, words and summary, newest last, as many as the card holds, "N earlier" above | none |
+| `bd-focus` | Focus | The current task, a live timer (`since_ts`, ticking every 15 s), a due check-in as a question about the current task ("Still on WGU assignment? 45m in."), the paused tasks, a "What are you doing?" box | Enter: `log {text}`. Switch: `set_task {title}`. Done (header): `update_task {task_id, status: "done"}`. A paused task: `update_task {task_id, status: "active"}` |
+| `bd-journal` | Today (`default: false`) | The day's entries, time, words and summary, newest last, as many as the card holds, "N earlier" above (it also counts the entries `day` left out: it returns the newest 60) | Export (header): fetches `/apps/body-double/export?format=markdown` through the kernel's proxy and saves the file. No tool call |
 | `bd-loose-ends` | Loose ends (`default: false`) | The open loose ends from `now`, "N more", a box to add one | `close_thread {thread_id}`, `open_thread {note}` |
 | `bd-checkins` | Check-ins (`default: false`) | On/off, every 15m/30m/45m/1h/1h 30m, the next one, quiet hours, the plan's zone if not this device's | `checkins {on}` or `checkins {every_minutes}`, each with `timezone` from `Intl.DateTimeFormat().resolvedOptions().timeZone` (sent again without it if the app cannot load that zone) |
 
@@ -43,6 +44,13 @@ What is typed in a box survives the card's minute refresh and keeps the cursor. 
 outside a tap may not bring the keyboard back. A box is cleared as soon as its words are sent, so
 anything typed while the call is out stays. A failed write puts the words back, unless something
 new was typed, and says why in the card's note line.
+
+Export fetches the file first, so a refusal (no `read`, the app down) is a note on the card, not a
+page of JSON. It then saves the file through a link on the card, under the name the app's
+`content-disposition` gives. The path sits beside SayLLM's own (`…/apps/llmplayground/` becomes
+`…/apps/body-double/export`), so it is same-origin, and SayLLM's `connect-src 'self'` allows it.
+The journal never passes through a tool, so it stays out of the chat model's context and the
+kernel's tool audit.
 
 Today and Loose ends never lose a row without a word. When a card is short, Today hides its oldest
 lines first, so the line just said always shows, and its "N earlier" line counts them. Loose ends
@@ -176,8 +184,10 @@ The Add widgets drawer groups widgets by app. Without these, the cards land unde
 
 SayLLM shows the owner's notices as pinned cards, for an allowlist of categories (main `app.js`, Read
 2026-10-13T23:09:08Z and `sed` 2026-10-14T00:49:42Z). The app raises `body-double-checkin` only for
-people in its `notices_for` (the owner), and SayLLM polls notices only for the owner, so the two agree.
-A check-in's card reads "Check-in" / "Still on WGU assignment? 45m in." Repeated check-ins collapse
+the owner (its `notices_for`), and SayLLM polls notices only for the owner, so the two agree.
+A check-in's card reads "Check-in" / "Still on your current task? 45m in." and, with loose ends
+open, "1 loose end open." It carries none of the person's words: no task title, no note, no mood.
+The Focus card names the task. Repeated check-ins collapse
 into one card (`alertGroups` keys on category and title). Answering one (a `log`, a task change)
 retires it, and the card goes on the next poll, within a minute.
 
@@ -310,7 +320,7 @@ the tools.
 | Task | General conversation |
 | Personality | Neutral (the instructions below already set the tone) |
 | Default reasoning | fast. Move it up if the fast tier proves unreliable at tool calls. |
-| Memory enabled | the owner's choice. Tool results never form memories (the poisoning guard), so the journal stays in the app either way. Leave the sensitive-topics switch off: moods are emotional states. |
+| Memory enabled | the owner's choice. What the person types in chat forms memories as any message does. The app's tool results never do (the poisoning guard), so what the page writes stays in the app. Leave the sensitive-topics switch off: moods are emotional states. |
 | Temperature | 0.6 (the iOS app's sampler) |
 
 Custom instructions:
@@ -318,8 +328,8 @@ Custom instructions:
 ```text
 You are the user's body double for interstitial journaling. Through the day they tell you what they are doing. You keep them oriented and keep their record with the body-double tools.
 
-- Every time they say what they are doing, thinking or feeling, call body-double__log first, with their own words as text and a one-line summary. Set mood only when they clearly state one.
-- When they start or switch to something, call body-double__set_task with a short title. When they finish or drop it, call body-double__update_task with its id.
+- When they start or switch to something, first call body-double__set_task with a short title. When they finish or drop it, call body-double__update_task with its id.
+- Every time they say what they are doing, thinking or feeling, call body-double__log, with their own words as text and a one-line summary. Set mood only when they clearly state one.
 - When they mention something to come back to, call body-double__open_thread. When it is dealt with, call body-double__close_thread with its id.
 - "Check on me in 25 minutes" is body-double__checkins with next_in_minutes.
 - If you are not sure what is current, call body-double__now. A question is not an entry: answer it from body-double__now or body-double__day, and do not log it.
@@ -333,7 +343,7 @@ Asked for a recap of the day, read body-double__day and write four to six plain 
 ## Checked so far
 
 - `node --check public/body-double-widgets.js`; `node --test tests/body-double-widgets.test.js`:
-  29 pass (Node 22.22). Node 22 does not take a directory for `--test`; give the file, or a glob
+  32 pass (Node 22.22). Node 22 does not take a directory for `--test`; give the file, or a glob
   such as `node --test 'tests/*.test.js'`.
 - Every "Before" above was applied, exactly once each, to the files reconstructed from the owner's
   sessions (`widgets.js`, `apps.js`, `home.js`, `styles.css`, as of 2026-10-14) and to the verbatim
@@ -344,7 +354,11 @@ Asked for a recap of the day, read body-double__day and write four to six plain 
   `widgetSpan(widget, "large")` gives the page spans above; `availableApps` shows the rail entry only
   with `body-double.now`; every page's widgets exist; `styles.css` still has one
   `max-width: 860px` block, with the new rule inside it, and its braces balance.
-- Not checked: the cards in a real browser. `scripts/preview.js` with
+- Export in Chromium (Playwright): a page at `/apps/llmplayground/` with SayLLM's own
+  `content-security-policy`, the Today card, and a stand-in `/apps/body-double/export`. One click
+  saved `body-double-2026-10-15.md` with the file's content, and the page stayed where it was. A
+  403 showed "Could not export: identity lacks 'read'" on the card.
+- Not checked: the cards in the real SayLLM. `scripts/preview.js` with
   `scripts/preview-fixture.json` (tool answers keyed `"body-double.now {}"`, `"body-double.day {}"`)
   would show them against the examples in `apps/body-double.md`.
 

@@ -7,21 +7,21 @@ import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
-  EVERY_CHOICES, LIMITS, boxText, checkinArgs, checkinPrompt, checkinSummary, deviceZone, elapsedLabel, focusView,
-  fitWithCount, journalLimit, journalRows, looseEnds, registerBodyDoubleWidgets, spanLabel,
+  EVERY_CHOICES, LIMITS, attachmentName, boxText, checkinArgs, checkinPrompt, checkinSummary, deviceZone, elapsedLabel,
+  exportPath, focusView, fitWithCount, journalLimit, journalRows, looseEnds, registerBodyDoubleWidgets, spanLabel,
 } from "../public/body-double-widgets.js";
 
 // The tool results as apps/body-double.md gives them.
 const NOW = {
   now: "Thu 15 Oct 14:32",
   timezone: "America/New_York",
-  current_task: { id: 3, title: "Refactor IVR callback handler", status: "active", since: "12:22", since_ts: 1792089720, minutes: 130, for: "2h 10m" },
+  current_task: { id: 3, title: "Refactor IVR callback handler", status: "active", since: "12:22", since_ts: 1792081320, minutes: 130, for: "2h 10m" },
   minutes_since_last_entry: 43,
   open_threads: [{ id: 1, note: "email Dana re: schema review", opened: "Wed 14 Oct 16:05", opened_ts: 1792008300 }],
   more_open_threads: 0,
   paused_tasks: [{ id: 2, title: "WGU assignment" }],
   recent: [{ id: 9, at: "13:49", at_ts: 1792086540, text: "started refactor after standup", summary: null }],
-  checkins: { on: true, every_minutes: 45, quiet: "22:00-08:00", timezone: "America/New_York", next: "15:17", next_ts: 1792095420, due: false, unanswered: 0, notices: true },
+  checkins: { on: true, every_minutes: 45, quiet: "22:00-08:00", timezone: "America/New_York", next: "15:17", next_ts: 1792091820, due: false, unanswered: 0, notices: true },
 };
 const DAY = {
   date: "2026-10-15", label: "Thu 15 Oct", timezone: "America/New_York",
@@ -32,6 +32,7 @@ const DAY = {
   ],
   tasks: [{ id: 3, title: "Refactor IVR callback handler", status: "active" }],
   threads_opened: [], threads_closed: [], open_threads: [],
+  earlier: 0,
   checkins: { raised: 3, answered: 2 },
   truncated: false,
 };
@@ -40,6 +41,7 @@ const at = (ts, plusMinutes = 0) => (ts + plusMinutes * 60) * 1000;
 // ---- a stand-in DOM and card --------------------------------------------------------------
 
 const mounted = [];
+const downloads = [];
 afterEach(() => {
   // A card that is gone no longer reloads when another acts.
   for (const body of mounted.splice(0)) body.isConnected = false;
@@ -50,7 +52,20 @@ class FakeNode {
     Object.assign(this, { tag, className, textContent: text, children: [], attributes: {}, listeners: {} });
     Object.assign(this, { hidden: false, disabled: false, isConnected: true, value: "", title: "" });
   }
-  append(...nodes) { this.children.push(...nodes); }
+  append(...nodes) {
+    for (const node of nodes) if (node && typeof node === "object") node.parent = this;
+    this.children.push(...nodes);
+  }
+  remove() {
+    if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this);
+    this.parent = null;
+    this.isConnected = false;
+  }
+  // A link's click is a download; anything else, a click event.
+  click() {
+    if (this.tag === "a") downloads.push({ href: this.href, download: this.download, inPage: this.isConnected && !!this.parent });
+    else this.fire("click");
+  }
   // As Chromium does: a focused box being removed gets "blur" while it is
   // still in the page, and only then is it gone.
   replaceChildren(...nodes) {
@@ -190,9 +205,9 @@ test("the live counter counts whole minutes from the task's start", () => {
 
 // ---- what each card shows -----------------------------------------------------------------
 
-test("Focus shows the current task, how long, and a check-in in the notice's words", () => {
+test("Focus shows the current task, how long, and a due check-in as a question about it", () => {
   const view = focusView(NOW, at(NOW.current_task.since_ts, 130));
-  assert.deepEqual(view.task, { id: 3, title: "Refactor IVR callback handler", since: "12:22", sinceTs: 1792089720 });
+  assert.deepEqual(view.task, { id: 3, title: "Refactor IVR callback handler", since: "12:22", sinceTs: 1792081320 });
   assert.equal(view.elapsed, "2h 10m");
   assert.equal(view.due, false);
   assert.equal(view.dueText, "");
@@ -224,11 +239,33 @@ test("Today lists the day oldest first, so the newest is last, and keeps what fi
   assert.equal(cut.earlier, 8);
   assert.equal(cut.rows.length + 1, 5);
   assert.equal(journalRows({ entries: [], truncated: true }).truncated, true);
+
+  // `day` returns the newest 60 and counts the rest: they count here too.
+  const big = { ...many, earlier: 40, truncated: true };
+  assert.deepEqual(journalRows(big), { rows: journalRows(many).rows, earlier: 40, total: 52, truncated: true });
+  const fitted = journalRows(big, 5);
+  assert.equal(fitted.rows.length, 4);
+  assert.equal(fitted.earlier, 48);
+  const roomy = journalRows({ ...big, entries: big.entries.slice(0, 3) }, 5);
+  assert.equal(roomy.rows.length, 3, "room for all three and the line");
+  assert.equal(roomy.earlier, 40);
+  assert.equal(journalRows({ ...big, entries: big.entries.slice(0, 5) }, 5).rows.length, 4, "the line needs a place");
+  assert.equal(journalRows({ ...many, earlier: -3 }).earlier, 0);
   assert.deepEqual(journalRows(null).rows, []);
   assert.equal(journalLimit([4, 2]), 3);
   assert.equal(journalLimit([4, 4]), 7);
   assert.equal(journalLimit([4, 6]), 11);
   assert.equal(journalLimit(undefined), 7);
+});
+
+test("the journal downloads from beside SayLLM's own path", () => {
+  assert.equal(exportPath("/apps/llmplayground/"), "/apps/body-double/export?format=markdown");
+  assert.equal(exportPath("/house/apps/llmplayground/index.html"), "/house/apps/body-double/export?format=markdown");
+  assert.equal(exportPath("/", "json"), "/apps/body-double/export?format=json");
+  assert.equal(exportPath(undefined, "pdf"), "/apps/body-double/export?format=markdown");
+  assert.equal(attachmentName('attachment; filename="body-double-2026-10-15.md"'), "body-double-2026-10-15.md");
+  assert.equal(attachmentName('attachment; filename="../../x.sh"'), "body-double.md", "only a plain name");
+  assert.equal(attachmentName(null), "body-double.md");
 });
 
 test("Loose ends counts the ones now leaves out", () => {
@@ -480,6 +517,71 @@ test("Today shows time, words and summary, newest last, fitted to the card", () 
   assert.equal(earlier.hidden, true, "nothing earlier to count");
   const empty = show(registry, dom, "bd-journal", { ...DAY, entries: [] }, fakeCtx());
   assert.match(text(empty), /Nothing logged today/);
+  const more = fakeCtx({ span: [4, 4] });
+  show(registry, dom, "bd-journal", { ...DAY, earlier: 57 }, more);
+  assert.equal(more.sub, "60 entries", "the ones day left out count");
+});
+
+/** Runs `run` with fetch, location and object URLs stood in for. */
+async function withDownload(response, run) {
+  const saved = { fetch: globalThis.fetch, location: globalThis.location, create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+  const fetched = [];
+  globalThis.fetch = async (url, options) => {
+    fetched.push([url, options]);
+    if (response instanceof Error) throw response;
+    return response;
+  };
+  Object.defineProperty(globalThis, "location", { value: { pathname: "/apps/llmplayground/" }, configurable: true, writable: true });
+  URL.createObjectURL = () => "blob:journal";
+  URL.revokeObjectURL = () => {};
+  try { await run(fetched); } finally {
+    globalThis.fetch = saved.fetch;
+    Object.defineProperty(globalThis, "location", { value: saved.location, configurable: true, writable: true });
+    URL.createObjectURL = saved.create;
+    URL.revokeObjectURL = saved.revoke;
+  }
+}
+
+test("Today: Export downloads the journal from the app's route, not a tool", async () => {
+  const { registry, dom } = setup();
+  const ctx = fakeCtx({ span: [4, 4] });
+  const body = show(registry, dom, "bd-journal", DAY, ctx);
+  const [exporter] = ctx.head;
+  assert.match(text(exporter), /Export/);
+  const file = {
+    ok: true, status: 200,
+    headers: { get: (name) => (name === "content-disposition" ? 'attachment; filename="body-double-2026-10-15.md"' : null) },
+    blob: async () => "# Body double journal",
+  };
+  downloads.length = 0;
+  await withDownload(file, async (fetched) => {
+    click(exporter);
+    await settle();
+    assert.deepEqual(fetched.map(([url]) => url), ["/apps/body-double/export?format=markdown"]);
+    assert.equal(fetched[0][1].credentials, "same-origin");
+  });
+  assert.deepEqual(downloads, [{ href: "blob:journal", download: "body-double-2026-10-15.md", inPage: true }]);
+  assert.equal(find(body, (node) => node.tag === "a"), null, "the link is gone once used");
+  assert.equal(ctx.calls.length, 0, "no tool call: the journal never enters a chat turn");
+  assert.equal(exporter.disabled, false);
+  assert.deepEqual(ctx.notes, [""]);
+});
+
+test("Today: a refused export says why on the card", async () => {
+  const { registry, dom } = setup();
+  const ctx = fakeCtx({ span: [4, 4] });
+  show(registry, dom, "bd-journal", DAY, ctx);
+  const refused = { ok: false, status: 403, json: async () => ({ error: "identity lacks 'read'" }), headers: { get: () => null } };
+  await withDownload(refused, async () => {
+    click(ctx.head[0]);
+    await settle();
+  });
+  assert.deepEqual(ctx.notes, ["Could not export: identity lacks 'read'"]);
+  await withDownload(new Error("network down"), async () => {
+    click(ctx.head[0]);
+    await settle();
+  });
+  assert.equal(ctx.notes.at(-1), "Could not export: network down");
 });
 
 test("Loose ends: close one, or add one", async () => {

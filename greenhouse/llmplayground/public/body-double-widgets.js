@@ -3,7 +3,8 @@
 // are on and for how long, a box to say what you are doing, today's journal,
 // the loose ends you mentioned, and how often it checks on you. Every control
 // is one call to one of the app's tools, as the person, with no model in the
-// path.
+// path; Export downloads the journal from the app's own route, through the
+// kernel's /apps/ proxy, so it never goes into a chat turn.
 //
 // widgets.js calls registerBodyDoubleWidgets() at its end and hands over its
 // own helpers. This module imports nothing: headButton is private to
@@ -45,7 +46,7 @@ export function elapsedLabel(sinceTs, nowMs = Date.now()) {
   return spanLabel((nowMs / 1000 - sinceTs) / 60);
 }
 
-/** A check-in in the notice's own words: "Still on <task>? 2h 10m in." */
+/** A due check-in, asked about the task by name: "Still on <task>? 2h 10m in." The notice itself names no task; the person's own card can. */
 export function checkinPrompt(title, elapsed) {
   if (!title) return "What are you working on?";
   return elapsed ? `Still on ${title}? ${elapsed} in.` : `Still on ${title}?`;
@@ -89,6 +90,8 @@ export function focusView(now, nowMs = Date.now()) {
  * The day's entries from `day`, oldest first so the newest is last, each
  * { id, time, text, summary }. With a limit, only the newest that fit, one
  * place kept for the "N earlier" line: { rows, earlier, total, truncated }.
+ * `earlier` and `total` count the entries `day` itself left out (its
+ * `earlier`: it returns the newest 60).
  */
 export function journalRows(day, limit = Infinity) {
   const entries = (Array.isArray(day?.entries) ? day.entries : [])
@@ -102,10 +105,28 @@ export function journalRows(day, limit = Infinity) {
       summary: entry.summary && entry.summary !== entry.text ? String(entry.summary) : "",
     }));
   const truncated = day?.truncated === true;
+  const left = Number.isInteger(day?.earlier) && day.earlier > 0 ? day.earlier : 0;
+  const total = entries.length + left;
   const room = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : Infinity;
-  if (entries.length <= room) return { rows: entries, earlier: 0, total: entries.length, truncated };
+  if (entries.length <= room && (!left || entries.length < room)) {
+    return { rows: entries, earlier: left, total, truncated };
+  }
   const rows = entries.slice(-Math.max(1, room - 1));
-  return { rows, earlier: entries.length - rows.length, total: entries.length, truncated };
+  return { rows, earlier: total - rows.length, total, truncated };
+}
+
+/** Where the journal downloads: beside SayLLM's own path, under the kernel's /apps/ proxy. */
+export function exportPath(pathname, format = "markdown") {
+  const path = String(pathname || "");
+  const at = path.indexOf("/apps/");
+  const base = at >= 0 ? path.slice(0, at) : "";
+  return `${base}/apps/${APP}/export?format=${format === "json" ? "json" : "markdown"}`;
+}
+
+/** The file name a content-disposition header gives, if it is a plain one. */
+export function attachmentName(header, fallback = "body-double.md") {
+  const match = /filename="([^"]+)"/.exec(String(header || ""));
+  return match && /^[\w.-]+$/.test(match[1]) ? match[1] : fallback;
 }
 
 /** How many journal lines a card of `span` ([columns, rows]) holds: about two a row. */
@@ -234,6 +255,44 @@ async function act(ctx, what, name, args, controls = [], done = () => {}) {
   ctx.note("");
   refreshAll(ctx);
   return true;
+}
+
+/**
+ * Downloads the journal as Markdown. Fetched first, so a refusal is a note on
+ * the card rather than a page of JSON; then saved through a link on the card.
+ */
+async function downloadJournal(ctx, body, el, control) {
+  control.disabled = true;
+  try {
+    const response = await fetch(exportPath(globalThis.location?.pathname), { credentials: "same-origin" });
+    if (!response.ok) {
+      let reason = `HTTP ${response.status}`;
+      try {
+        const answer = await response.json();
+        if (answer?.error) reason = String(answer.error);
+      } catch {
+        // Not JSON: the status says it.
+      }
+      ctx.note(`Could not export: ${reason}`);
+      return;
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = el("a", "bd-download");
+    link.href = url;
+    link.download = attachmentName(response.headers.get("content-disposition"));
+    link.hidden = true;
+    body.append(link);
+    link.click();
+    link.remove();
+    // Kept a while: some browsers read the file after click() returns.
+    setTimeout(() => URL.revokeObjectURL(url), 30_000)?.unref?.();
+    ctx.note("");
+  } catch (error) {
+    ctx.report?.(error);
+    ctx.note(`Could not export: ${errorText(error)}`);
+  } finally {
+    control.disabled = false;
+  }
 }
 
 // What the person is typing outlives the card's refresh (every minute) and
@@ -459,9 +518,13 @@ export function registerBodyDoubleWidgets({ registerWidget, el, button, input, i
     load: (ctx) => read(ctx, "day"),
     render(day, body, ctx) {
       remember(body, ctx);
-      ctx.actions();
-      const { rows, earlier, total, truncated } = journalRows(day, journalLimit(ctx.span));
-      ctx.subtitle(total ? `${total}${truncated ? "+" : ""} ${total === 1 ? "entry" : "entries"}` : "");
+      // The whole journal, as a file: from the app's download route, never a
+      // tool, so it stays out of the chat model's context.
+      const exporter = headButton("Export", "", () => void downloadJournal(ctx, body, el, exporter), "ghost more");
+      exporter.title = "Download the whole journal as Markdown";
+      ctx.actions(exporter);
+      const { rows, earlier, total } = journalRows(day, journalLimit(ctx.span));
+      ctx.subtitle(total ? `${total} ${total === 1 ? "entry" : "entries"}` : "");
       if (!rows.length) {
         body.append(row("empty-state", icon("chat"), el("span", "", "Nothing logged today.")));
         return;

@@ -20,36 +20,38 @@ platform's lines:
 | On-device Qwen3 via llama.cpp, one stateless turn per utterance | The one persistent assistant (SayLLM chat). It calls this app's tools; the kernel routes inference. The app holds no model. |
 | App-assembled context block (`[time] [current task] [open threads] [recent]`) | The `now` tool returns the same block as JSON. |
 | `{speech, actions[≤3]}` under a GBNF grammar; unknown tools dropped | Native tool calls through the kernel. Each tool checks its own arguments strictly; an unknown tool is a 404. |
-| Raw entry stored before inference, every time | The `log` tool stores the person's words before anything else happens. The SayLLM page's narrate box calls `log` directly, with no model in the path. |
+| Raw entry stored before inference, every time | Only on the page. The narrate box calls `log` directly, with no model in the path, so the words are stored first. In chat, SayLLM keeps the person's message, but a journal entry exists only if the model calls `log`, and its `text` is what the model sends. Nothing is journaled when inference fails. Entries do not record which path wrote them: the iOS `source` column was dropped, because both paths reach the app as the same kind of tool call. |
 | SQLite (GRDB): entries, tasks, threads, check-ins, app_state | SQLite in the app's state directory, per person. |
-| Local notification chain (8 ahead), quiet hours, reply from the notification | A kernel cron schedule calls `checkin_tick` every five minutes. The app decides who is due, respects quiet hours, and raises an in-app notice. Answering means logging anything. |
+| Local notification chain (8 ahead), quiet hours, reply from the notification | A kernel cron schedule calls `checkin_tick` every five minutes. The app decides who is due, respects quiet hours, and raises an in-app notice for the owner. Answering means logging anything. |
+| Opening the app reset the check-in cadence | Not carried over. Only writes count as presence. Opening SayLLM, or reading `now` or `day`, answers nothing. |
 | Daily recap by the model | `day` returns the day. The assistant writes the recap in chat. |
-| Export (JSON, Markdown) | `export` returns either. |
+| Export (JSON, Markdown) | A download from the app's own route, `GET /apps/body-double/export`, through the kernel's proxy: the Export button on the Today card. It is not a tool, so the journal never goes into a chat turn. |
 | TTS, push-to-talk, Live Activity | SayLLM already has voice. A Home widget shows the current task. |
 
 ## How a person uses it
 
-- **In chat.** "ok, switching to the WGU assignment for a bit." The assistant calls `set_task`
-  and `log`, then answers in a sentence or two: "WGU it is. The IVR refactor is paused at
+- **In chat.** "ok, switching to the WGU assignment for a bit." The assistant calls `set_task`,
+  then `log`, then answers in a sentence or two: "WGU it is. The IVR refactor is paused at
   2h 10m." "What was I doing before lunch?" reads `now` or `day`.
 - **On the Body double page in SayLLM** (rail entry and Home widgets, see
   [`llmplayground/`](../llmplayground/)): the current task with a live timer, a box to say what
-  they are doing, Done and Switch buttons, today's journal, loose ends and check-in settings.
-  Everything there is a direct tool call.
-- **Check-ins.** After `every_minutes` without activity, a check-in is raised: "Still on WGU
-  assignment? 45m in." Saying anything (a `log`, a task change) answers it and restarts the clock.
+  they are doing, Done and Switch buttons, today's journal with an Export button, loose ends and
+  check-in settings. Every control except Export is a direct tool call.
+- **Check-ins.** After `every_minutes` without activity, a check-in is raised. The owner also gets
+  a notice: "Still on your current task? 45m in." Saying anything (a `log`, a task change)
+  answers it and restarts the clock.
 
 ## Tools
 
 Qualified as `body-double.<name>`. Every person's data is their own: the user in the kernel's
-identity token (`u`) scopes every read and write. Ids are shown by `now` and `day`; an id that is
-not the caller's is "not found".
+identity token (`u`) scopes every read and write. Ids are each person's own numbers (their first
+task is 1, whoever else has tasks), shown by `now` and `day`. An id that is not one of the
+caller's is "not found".
 
 | Tool | Effect | Arguments |
 |---|---|---|
 | `now` | read | none |
 | `day` | read | `date?` (`YYYY-MM-DD`, default today in the person's zone) |
-| `export` | read | `format?` (`markdown` default, or `json`), `from?`, `to?` (`YYYY-MM-DD`) |
 | `log` | write | `text` (1–2000 chars, the person's words), `summary?` (≤200), `mood?` (≤40) |
 | `set_task` | write | `title` (1–200) |
 | `update_task` | write | `task_id` (integer), `status` (`active`, `paused`, `done`, `dropped`) |
@@ -63,20 +65,26 @@ a silent default. Errors come back as `{"error": "..."}` with 400 (bad arguments
 task or loose end), 409 (a conflicting change) or 500 (storage).
 
 **Tasks.** A task is `active`, `paused`, `done` or `dropped`. At most one is active, and the
-active task is the current task. `set_task` pauses the previous current task and makes the named
-one current, resuming an open task of the same title (case-insensitive) rather than making a
-duplicate. `update_task` to `active` resumes a paused task the same way. `done` and `dropped`
-end it.
+active task is the current task.
+- `set_task` pauses the previous current task and makes the named one current. It resumes a
+  paused task of the same title, in any case and any script, rather than making a duplicate. A
+  done or dropped task of that title is not resumed; a new one is made.
+- `update_task` to `active` makes any of the person's tasks current again, a done or dropped one
+  included. `done` and `dropped` end a task.
+- An entry is filed under the task that is current when `log` runs. That is why `set_task`'s
+  description says to call it before `log` when the person switches.
 
 **Loose ends** (`threads`) are notes the person wants raised later. They stay open until closed.
 
 **Activity.** Every write tool except `checkins` counts as the person being there: it answers an
-open check-in, retires its notice and restarts the check-in clock.
+open check-in, retires its notice and restarts the check-in clock. Reads do not count.
 
 ### Results
 
 Times are the person's local time. A time on the same local day is `HH:MM`; an earlier one is
-`Thu 15 Oct 14:32`. Every time has a `*_ts` twin in Unix seconds for live counters.
+`Thu 15 Oct 14:32`. The times a live display needs have a `*_ts` twin in Unix seconds: a task's
+`since`, an entry's `at`, a loose end's `opened` and `closed`, and the next check-in. `now.now`
+and the `time` fields in `day` have none.
 
 `now`:
 
@@ -85,7 +93,7 @@ Times are the person's local time. A time on the same local day is `HH:MM`; an e
   "now": "Thu 15 Oct 14:32",
   "timezone": "America/New_York",
   "current_task": {"id": 3, "title": "Refactor IVR callback handler", "status": "active",
-                   "since": "12:22", "since_ts": 1792089720, "minutes": 130, "for": "2h 10m"},
+                   "since": "12:22", "since_ts": 1792081320, "minutes": 130, "for": "2h 10m"},
   "minutes_since_last_entry": 43,
   "open_threads": [{"id": 1, "note": "email Dana re: schema review",
                     "opened": "Wed 14 Oct 16:05", "opened_ts": 1792008300}],
@@ -94,7 +102,7 @@ Times are the person's local time. A time on the same local day is `HH:MM`; an e
   "recent": [{"id": 9, "at": "13:49", "at_ts": 1792086540,
               "text": "started refactor after standup", "summary": null}],
   "checkins": {"on": true, "every_minutes": 45, "quiet": "22:00-08:00",
-               "timezone": "America/New_York", "next": "15:17", "next_ts": 1792095420,
+               "timezone": "America/New_York", "next": "15:17", "next_ts": 1792091820,
                "due": false, "unanswered": 0, "notices": true}
 }
 ```
@@ -102,10 +110,13 @@ Times are the person's local time. A time on the same local day is `HH:MM`; an e
 `current_task` is `null` when there is none, and `minutes_since_last_entry` is `null` before the
 first entry. `recent` is the last five entries, oldest first, `text` cut to 160 characters.
 `open_threads` is the oldest ten, and `more_open_threads` counts the rest. `paused_tasks` is the
-five most recently touched. In `checkins`, `quiet` is `null` when the person has no quiet hours,
-`next` is `null` when nothing is scheduled, and `due` means a check-in was raised and not yet
-answered. `notices` says whether this person's check-ins also raise a Greenhouse notice
-(configuration `notices_for`).
+five most recently touched. In `checkins`:
+- `quiet` is `null` when the person has no quiet hours;
+- `next` is `null` when nothing is scheduled;
+- `due` means a check-in was raised and not yet answered;
+- `timezone` is the zone in use, the person's own or the household's;
+- `notices` says whether this person's check-ins also raise a Greenhouse notice, which is true
+  only for the owner named in the configuration (`notices_for`).
 
 `log`:
 
@@ -118,7 +129,7 @@ answered. `notices` says whether this person's check-ins also raise a Greenhouse
 ```
 
 `set_task`: `{"current_task": {...}, "paused": {"id": 3, "title": "...", "minutes": 130} | null,
-"resumed": false, "unchanged": false}`. `resumed` is true when an open task of that title was
+"resumed": false, "unchanged": false}`. `resumed` is true when a paused task of that title was
 picked up again. `unchanged` is true when it was already the current task.
 
 `update_task`: `{"task": {"id": 3, "title": "...", "status": "done"}, "current_task": {...} | null,
@@ -127,8 +138,8 @@ picked up again. `unchanged` is true when it was already the current task.
 `open_thread`: `{"thread": {"id": 4, "note": "...", "opened": "14:40", "opened_ts": 1792089600},
 "open_threads": 2}`.
 
-`close_thread`: `{"thread": {"id": 4, "note": "...", "closed": "15:02", "closed_ts": 1792090920},
-"open_threads": 1, "already_closed": false}`.
+`close_thread`: `{"thread": {"id": 4, "note": "...", "opened": "14:40", "opened_ts": 1792089600,
+"closed": "15:02", "closed_ts": 1792090920}, "open_threads": 1, "already_closed": false}`.
 
 `day`:
 
@@ -137,27 +148,58 @@ picked up again. `unchanged` is true when it was already the current task.
   "date": "2026-10-15", "label": "Thu 15 Oct", "timezone": "America/New_York",
   "entries": [{"id": 9, "time": "13:49", "at_ts": 1792086540, "text": "started refactor after standup",
                "summary": null, "mood": null, "task": "Refactor IVR callback handler"}],
+  "earlier": 0,
   "tasks": [{"id": 3, "title": "Refactor IVR callback handler", "status": "active"}],
+  "more_tasks": 0,
   "threads_opened": [{"id": 4, "note": "...", "time": "14:40"}],
   "threads_closed": [{"id": 1, "note": "...", "time": "15:02"}],
   "open_threads": [{"id": 4, "note": "..."}],
+  "more_open_threads": 0,
   "checkins": {"raised": 3, "answered": 2},
   "truncated": false
 }
 ```
 
-`tasks` are the tasks the day touched: logged against, created, or changed. At most 400 entries
-are returned; `truncated` says when there were more.
+`day` is sized for a chat turn, because the kernel puts a tool result into the model's context
+whole, on an 8,192-token runtime:
+- `entries` are the day's newest 60, oldest first, each `text` cut to 240 characters;
+- `earlier` counts the day's entries left out, and `truncated` is true when there are any;
+- `tasks` are the 20 most recently touched that the day touched (logged against, created or
+  changed), and `more_tasks` counts the rest;
+- `open_threads` is the oldest ten still open, and `more_open_threads` counts the rest.
+
+A full heavy day comes to well under 24 KB.
 
 `checkins`: `{"checkins": {...the same object as in now...}}`.
 
-`export`: `{"format": "markdown", "filename": "body-double-2026-10-15.md", "entries": 212,
-"content": "..."}`. The content is at most 512 KiB; past that the tool asks for a narrower
-`from`/`to`. The JSON form holds every entry, task, loose end and check-in with UTC ISO-8601
-times, plus the person's check-in settings.
+`checkin_tick`: `{"due": 1, "raised": 1, "notified": 1, "deferred_for_quiet": 0, "paused": 0}`.
+When a notice could not be sent, or a check-in could not be recorded, the tick still does
+everything else. It then answers 502 (500 for storage), with the counts and each failure in
+`error`, so the kernel's tool audit and Activity view show the call as failed.
 
-`checkin_tick`: `{"due": 1, "raised": 1, "notified": 1, "deferred_for_quiet": 0, "paused": 0,
-"errors": []}`.
+### The journal download
+
+`GET /export?format=markdown|json&from=YYYY-MM-DD&to=YYYY-MM-DD`, reached by a browser as
+`/apps/body-double/export…` through the kernel's proxy. Every argument is optional: Markdown,
+and the whole journal. It needs a data-plane identity (`p` `data`, subject `human`) with `read`,
+so it is the person's own journal and nobody else's. Tool tokens are refused.
+
+The answer is the file:
+- `content-disposition: attachment; filename="body-double-2026-10-15.md"`;
+- `cache-control: no-store`;
+- `x-content-type-options: nosniff`.
+
+The proxy relays all three. The file is at most 16 MiB; past that the route asks for a shorter
+`from`/`to`. Unknown query names and a bad `format` are a 400.
+- **Markdown:** a heading per day, then a line per entry (time, words, summary, mood, task), then
+  the tasks and loose ends. The person's text is escaped, so line breaks become spaces and
+  Markdown and HTML syntax shows as written. A title such as `<img src=x onerror=…>` cannot run
+  in a viewer.
+- **JSON:** every entry, task, loose end and check-in in the span, with UTC ISO-8601 times and
+  the person's own ids, plus their check-in settings.
+
+It is not a tool. A tool's result goes into the model's context whole, and the kernel's tool
+audit keeps its arguments. A download does neither, and changes nothing.
 
 ### Tool descriptions (part of the contract)
 
@@ -167,49 +209,64 @@ short sentences, no flattery, no lectures"). They are in the manifest verbatim
 re-approves.
 
 They are kept short on purpose. The kernel offers every callable tool in every chat turn, with no
-relevance filtering. The nine people-facing schemas come to about 3.1 KB of JSON, roughly 780
-tokens by the chars/4 heuristic, on an 8,192-token runtime. The parameter schemas carry types,
-enums and lengths only; the app refuses anything else itself.
+relevance filtering. It sends each one with a `[body-double] ` prefix on the description, under
+the name `body-double__<tool>`. In that form the eight people-facing schemas come to about 2.9 KB
+of JSON, roughly 720 tokens by the chars/4 heuristic, on an 8,192-token runtime. The parameter
+schemas carry types, enums and lengths only; the app refuses anything else itself.
 
 ## Check-ins
 
 Each person has a plan: on or off, every N minutes, quiet hours, a time zone, the next due time,
-a requested one-off, and how many check-ins in a row went unanswered. The first write creates it from the
-configuration's defaults (45 minutes, quiet 22:00–08:00, on).
+a requested one-off, and how many check-ins in a row went unanswered. The first write creates it
+from the configuration's defaults (45 minutes, quiet 22:00–08:00, on). A person who never sets a
+zone follows the configuration's, including a later change to it.
 
 - **Activity** sets the next check-in to now + N minutes, moved to the end of quiet hours if it
   lands inside them, and resets the unanswered count.
 - **The tick** runs every five minutes (`schedules: checkins.tick`, cron `*/5 * * * *`, the
-  cadence of Home Assistant's house check). A check-in can be up to five minutes late. For each plan
-  that is on and due: inside quiet hours it moves the check-in to the end of them and raises
-  nothing. Otherwise it records a check-in, raises the notice if the person is in `notices_for`,
-  and schedules the next one N minutes on.
-- **Eight unanswered in a row** (the iOS chain length) and the plan stops raising until the
-  person is next active. Nobody gets pinged all night or all weekend.
-- `checkins {next_in_minutes}` asks for one at a set time ("check on me in 25 minutes"). Like the
-  iOS one-off notification it stands apart from the chain: activity does not move it, quiet
-  hours do not hold it, and it comes even with check-ins off. `next` shows whichever is sooner.
-- `checkins {on: false}` stops the chain, cancels a requested one, and takes down an unread
-  notice.
+  cadence of Home Assistant's house check). A check-in can be up to five minutes late. For each
+  plan with a check-in due:
+  - inside quiet hours, it moves the check-in to the end of them and raises nothing;
+  - otherwise it records the check-in and moves the plan on in one transaction, then schedules
+    the next one N minutes on.
 
-Quiet hours are local to the person's zone and may wrap midnight. Times come from the kernel's
-clock (the host's zone database). The kernel does not replay a cron minute missed while it was
-down. The tick catches up on the next run, because it compares against stored due times.
+  One person's failure does not stop the others'; that person's check-in is decided again at the
+  next tick. Then the owner's notice goes out. A notice that did not go out (the kernel was down,
+  say) is sent again at the next tick, for as long as the check-in is unanswered.
+- **Eight unanswered in a row** (the iOS chain length) and the plan stops raising until the
+  person is next active, or says `checkins {on: true}`. Nobody gets pinged all night or all
+  weekend. Changing the interval or quiet hours does not restart a chain that stopped this way.
+- `checkins {next_in_minutes}` asks for one at a set time ("check on me in 25 minutes"). It
+  stands apart from the chain: activity does not move it, and it comes even with check-ins off.
+  - Unlike the iOS one-off, which quiet hours moved like any other, it comes inside quiet hours
+    too, because it was asked for at that time.
+  - It counts toward the eight unanswered like any other check-in.
+  - `next` shows whichever is sooner, the chain's or the one-off.
+- `checkins {on: false}` stops the chain, cancels a requested one, and takes down an unread
+  notice. `checkins {on: true}` after unanswered check-ins answers them too and takes the notice
+  down.
+
+Quiet hours are local to the person's zone and may wrap midnight. A quiet end that falls in the
+repeated hour of a DST change ends at its first occurrence. Times come from the kernel's clock
+(the host's zone database). The kernel does not replay a cron minute missed while it was down.
+The tick catches up on the next run, because it compares against stored due times.
 
 **The notice.** Category `body-double-checkin`, sensitivity `private`, channel `in-app`, subject
-`body-double/<user>/checkin`, so a newer check-in replaces the older unread one and answering
-retires it. Text, with no model involved:
-
-- with a current task: title `Check-in`, body `Still on <task>? <2h 10m> in.`;
+`body-double/<user>/checkin`. A newer check-in replaces the older unread one, and answering
+retires it. The text is a template, with no model involved and none of the person's words:
+- with a current task: title `Check-in`, body `Still on your current task? 2h 10m in.`;
 - without one: body `What are you working on?`;
-- when a loose end is open, a second line: `Loose end: <oldest note>`.
+- when loose ends are open, a second line: `2 loose ends open.`
 
-Moods are never part of a check-in.
+No task title, loose-end note or mood is ever in a notice. A notice is proactive output that the
+kernel keeps in its own database (tier 1 on the appliance) whatever its sensitivity, and the
+owner's memory policy keeps sensitive topics out of proactive output. The page and the assistant
+say what the task is.
 
-**Who sees it.** Greenhouse notices are household alerts addressed to the owner (kernel
-`require_owner`), and SayLLM shows only an allowlist of categories. So:
-
-- a person's check-ins raise notices only if they are in `notices_for` (meant for the owner);
+**Who sees it.** Greenhouse notices are household-wide and only the owner reads them (kernel
+`require_owner`). SayLLM shows only an allowlist of categories. So:
+- only the owner's check-ins raise notices. `notices_for` names one person, the owner's user id,
+  and a list is refused, so nobody else's check-ins reach the owner's feed;
 - SayLLM shows the category once `body-double-checkin` is on its allowlist (`llmplayground/`);
 - for everyone, a due check-in also shows on their own Body double page and widget (`due`), and
   the assistant sees it in `now`.
@@ -223,14 +280,17 @@ open.
 `PRAGMA user_version` migrations. All times are Unix seconds (UTC).
 
 ```sql
-CREATE TABLE entries (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, at INTEGER NOT NULL,
-  text TEXT NOT NULL, summary TEXT, mood TEXT, task_id INTEGER);
-CREATE TABLE tasks (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL,
+CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+  seq INTEGER NOT NULL, at INTEGER NOT NULL, text TEXT NOT NULL, summary TEXT, mood TEXT,
+  task_id INTEGER);
+CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+  seq INTEGER NOT NULL, title TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('active','paused','done','dropped')),
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, active_since INTEGER);
 CREATE UNIQUE INDEX tasks_one_active ON tasks(user_id) WHERE status = 'active';
-CREATE TABLE threads (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, note TEXT NOT NULL,
-  opened_at INTEGER NOT NULL, closed_at INTEGER);
+CREATE TABLE threads (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+  seq INTEGER NOT NULL, note TEXT NOT NULL, opened_at INTEGER NOT NULL, closed_at INTEGER);
+-- and a UNIQUE (user_id, seq) index on each of the three
 CREATE TABLE checkins (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, raised_at INTEGER NOT NULL,
   answered_at INTEGER, notified INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE plans (user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL,
@@ -238,6 +298,12 @@ CREATE TABLE plans (user_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL,
   timezone TEXT NOT NULL, next_due_at INTEGER, oneoff_at INTEGER,
   unanswered INTEGER NOT NULL DEFAULT 0);
 ```
+
+`seq` is the id people and the model see: each person's own count. If the shared row ids were
+shown, one person could tell from the gaps how often someone else writes. Row ids stay inside the
+app; `AUTOINCREMENT` keeps them from being reused after a delete. An entry's `task_id` is a task
+row id, and it is only ever joined to the same person's tasks. `plans.timezone` is empty for a
+person who never chose a zone.
 
 The journal is personal and longitudinal. It belongs on the passkey-unlocked tier-2 volume once
 the appliance has one (proposal, decision 4).
@@ -253,7 +319,6 @@ health: /health
 tools:
   - { name: now,          effect: read }
   - { name: day,          effect: read }
-  - { name: export,       effect: read }
   - { name: log,          effect: write }
   - { name: set_task,     effect: write }
   - { name: update_task,  effect: write }
@@ -271,11 +336,14 @@ permissions:
   notify_categories: [{ category: body-double-checkin, sensitivity: private }]
 ```
 
-No secrets, no egress, no `model_compute`, no `ui`. The app talks only to the kernel on loopback:
-registration, `/api/notify` and `/api/notify/retire`.
+No secrets, no egress, no `model_compute`, no `ui`. The download route needs no manifest entry:
+the kernel's proxy reaches any registered app, and the app checks the identity itself. The app
+talks only to the kernel on loopback: registration, `/api/notify` and `/api/notify/retire`.
 
-People need `[read, write]` on `body-double`. Nobody needs `command`: the scheduler calls
-`checkin_tick` as `system:scheduler`, and the tool refuses any other caller.
+People need `[read, write]` on `body-double`; `read` alone shows the cards and allows the
+download. Nobody needs `command`. The scheduler calls `checkin_tick` as `system:scheduler`, and
+the tool refuses any other caller. The kernel would offer it in chat to someone granted
+`command`, which is one more reason to grant that to nobody.
 
 ## Configuration
 
@@ -285,17 +353,18 @@ People need `[read, write]` on `body-double`. Nobody needs `command`: the schedu
 {
   "version": "greenhouse-body-double-config-v1",
   "timezone": "America/New_York",
-  "notices_for": ["owner"],
+  "notices_for": "owner",
   "checkins": {"on": true, "every_minutes": 45, "quiet_from": "22:00", "quiet_until": "08:00"}
 }
 ```
 
-`timezone` is the default for people who have not set their own. `notices_for` lists the users
-whose check-ins may raise Greenhouse notices. `checkins` holds the defaults for a new plan; it and
-`notices_for` are optional. Environment: `GREENHOUSE_KERNEL_URL` (default
-`http://127.0.0.1:4000`), `GREENHOUSE_APP_PORT` (default `4107`),
-`GREENHOUSE_BODY_DOUBLE_CONFIG`, `GREENHOUSE_BODY_DOUBLE_STATE_DIR`, and the registration
-credential through systemd (`$CREDENTIALS_DIRECTORY/registration.credential`).
+`timezone` is the default for people who have not set their own. `notices_for` is the owner's
+user id: their check-ins also raise Greenhouse notices. It names one person, and a list is
+refused (see "Who sees it"). `checkins` holds the defaults for a new plan; it and `notices_for`
+are optional. Environment: `GREENHOUSE_KERNEL_URL` (default `http://127.0.0.1:4000`),
+`GREENHOUSE_APP_PORT` (default `4107`), `GREENHOUSE_BODY_DOUBLE_CONFIG`,
+`GREENHOUSE_BODY_DOUBLE_STATE_DIR`, and the registration credential through systemd
+(`$CREDENTIALS_DIRECTORY/registration.credential`).
 
 ## Not yet
 
@@ -304,3 +373,5 @@ credential through systemd (`$CREDENTIALS_DIRECTORY/registration.credential`).
 - **A model-worded check-in or an evening recap without asking.** These would need
   `model_compute: [background]` (D18). The proposal recommends not now.
 - **A reply box on the notice itself.** Today the person answers on the page or in chat.
+- **Opening the page as presence**, as opening the iOS app was. Today only a write counts.
+- **Editing and deleting entries.**
