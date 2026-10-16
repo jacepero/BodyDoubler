@@ -20,6 +20,7 @@ across to the same path.
 | `deploy/greenhouse.sysusers.d/body-double.conf` | its one line goes into `deploy/greenhouse.sysusers` | The app's principal |
 | `appliance/` | new files yes; `appliance/INTEGRATION.md` lists edits to existing ones | The Fedora bootc image additions |
 | `llmplayground/public/body-double-widgets.js`, `llmplayground/tests/body-double-widgets.test.js` | yes | SayLLM's rail page and Home widgets |
+| `llmplayground/tests/body-double-chat.test.js` | yes | The Body double persona task in chat. It runs only inside SayLLM, with the patch applied |
 | `llmplayground/INTEGRATION.md`, `llmplayground/public/body-double.css` | apply by hand | Edits to existing SayLLM files, and the CSS to merge |
 | `kernel/` | **no** | A development stand-in for the kernel crate's app SDK (see below) |
 | `Cargo.toml`, `Cargo.lock` | **no** | This folder's development workspace |
@@ -69,7 +70,7 @@ that workspace (nothing in the Greenhouse repository was changed):
   real files. With the edits applied: `nft -c` accepts the egress file, and systemd-sysusers and
   systemd-tmpfiles create the user and the directory.
 - **SayLLM:** every Before text in `llmplayground/INTEGRATION.md` occurs once in the real files.
-  With the patch applied, SayLLM's own suite goes from 411 of 412 passing to 450 of 451. The new
+  With the patch applied, SayLLM's own suite goes from 411 of 412 passing to 451 of 452. The new
   tests pass: the cards, and the Body double persona task's reserve and tool scope. The one
   failure is the same test before and after; it needs `deploy/`, which the copy lacked. The suite
   ran with stand-ins for `express` and `better-sqlite3`, since no packages could be installed. The Body double page rendered in Chromium from the real `home.js`, `widgets.js`
@@ -93,7 +94,9 @@ What the comparison found wrong was fixed in this folder. The deploy and SayLLM 
    [`appliance/INTEGRATION.md`](appliance/INTEGRATION.md) for the bootc image.
 4. Apply [`llmplayground/INTEGRATION.md`](llmplayground/INTEGRATION.md) to SayLLM.
 
-Approving the contract, setting grants and deploying SayLLM's front end are the owner's acts.
+Approving the contract, setting grants and deploying SayLLM are the owner's acts. The SayLLM patch
+changes its server (`src/`) as well as `public/`, so it needs a restart. A `public/`-only deploy
+would offer the Body double task while every chat still got the app's tools at full cost.
 
 ### Instructions for a Claude session in the Greenhouse repository
 
@@ -123,7 +126,7 @@ greenhouse/docs/design/body-double-proposal.md there first.
    rustfmt --edition 2021 --check on the crate's files. They passed read-only against main at
    d176a23 (greenhouse/README.md, "Checked against the real Greenhouse"). If anything fails on
    the current main, fix only real API differences in body-double-app, and report each one.
-5. Apply llmplayground/INTEGRATION.md to SayLLM (the new module, its test, and the listed
+5. Apply llmplayground/INTEGRATION.md to SayLLM (the new module, its two tests, and the listed
    edits). Run SayLLM's own tests.
 6. Make no other appliance/ edit yet. Report appliance/INTEGRATION.md's remaining edits as
    pending.

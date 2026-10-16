@@ -234,7 +234,9 @@ them. None is a register entry; recording one there is the owner's to do.
     - every other chat leaves the app out (`exclude_apps`), so it keeps its whole history budget
       and pays nothing for Body Double.
 
-    SayLLM's own suite passes with it, plus four new tests. Before any grant, read the live
+    SayLLM's own suite passes with it, plus five new tests, including one showing a long Body
+    double chat is trimmed to the reserved budget. Comparisons, which have no persona, leave the
+    app out too. Before any grant, read the live
     `GREENHOUSE_RESERVED_OVERHEAD_TOKENS` on VM140 (512 by default and in the recorded policy).
     Then check a long Body double conversation on the live configuration.
 12. **"Check on me in 25 minutes."** `checkins {next_in_minutes}` and the kernel's

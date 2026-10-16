@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { prepareChat } from "../src/chat-lifecycle.js";
+import { commitChat, prepareChat } from "../src/chat-lifecycle.js";
 import { UnavailableEmbeddingAdapter } from "../src/embeddings.js";
 import { createStore } from "../src/store.js";
 import { loadConfig } from "../src/config.js";
@@ -81,7 +81,38 @@ test("the reserve follows the configured value, and web search off still applies
     { ...budget, bodyDoubleOverhead: 0 },
   );
   assert.deepEqual(chat.inference.tool_scope, { exclude_apps: ["web-search"] });
+  assert.equal(chat.context.history.budget, Math.floor((8192 - 2048 - 512) * 0.8));
   store.close();
+});
+
+test("a long Body double chat is trimmed to the reserved budget, not the plain one", async () => {
+  const reserved = Math.floor((8192 - 2048 - 512 - BODY_DOUBLE_OVERHEAD_TOKENS) * 0.8);
+  const plainBudget = Math.floor((8192 - 2048 - 512) * 0.8);
+  const said = "Done the intro paragraph, next the citations for section two. ".repeat(3);
+  const results = {};
+  for (const kind of ["body-double", "plain"]) {
+    const store = createStore();
+    const personaId = kind === "body-double" ? bodyDoublePersona(store) : undefined;
+    let conversationId;
+    for (let i = 0; i < 40; i++) {
+      const turn = await prepare(store, {
+        clientRequestId: `request_long_${kind}_${i}`, message: said,
+        ...(personaId ? { personaId } : {}), ...(conversationId ? { conversationId } : {}),
+      });
+      conversationId = turn.conversationId;
+      commitChat({ store, ownerUser: owner, body: { turnId: turn.turnId, status: "complete", assistant: said } });
+    }
+    const last = await prepare(store, {
+      clientRequestId: `request_long_${kind}_last`, message: "status?", conversationId,
+      ...(personaId ? { personaId } : {}),
+    });
+    results[kind] = last.context.history;
+    store.close();
+  }
+  assert.equal(results["body-double"].budget, reserved);
+  assert.ok(results["body-double"].estimatedTokens <= reserved, JSON.stringify(results["body-double"]));
+  assert.equal(results.plain.budget, plainBudget);
+  assert.ok(results.plain.estimatedTokens > reserved, "the plain chat keeps more, so the trim really differs");
 });
 
 test("the Body double task carries the persona's instructions and no mood", () => {

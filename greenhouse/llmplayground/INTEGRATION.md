@@ -13,7 +13,7 @@ default" means for someone new.
 |---|---|
 | `public/body-double-widgets.js` | New. Copy to `llmplayground/public/`. The four cards and their pure helpers. It imports nothing. |
 | `tests/body-double-widgets.test.js` | New. Copy to `llmplayground/tests/`. 35 `node:test` tests; no DOM needed. |
-| `tests/body-double-chat.test.js` | New. Copy to `llmplayground/tests/`. 4 tests of the Body double task in chat (step 7 to 11). It imports SayLLM's own modules, so it runs only in SayLLM. |
+| `tests/body-double-chat.test.js` | New. Copy to `llmplayground/tests/`. 5 tests of the Body double task in chat (steps 7 to 11). It imports SayLLM's own modules, so it runs only in SayLLM. |
 | `public/body-double.css` | **Do not copy.** A reference copy of the rules that go into `styles.css` (step 6). It is not in `STATIC_ASSETS`, so it would never be served. |
 | `INTEGRATION.md` | This file. |
 
@@ -242,7 +242,7 @@ does not need it.
 
 ## 4. `public/app.js`
 
-Two places. First, SayLLM shows the owner's notices as pinned cards, for an allowlist of
+Three places. First, SayLLM shows the owner's notices as pinned cards, for an allowlist of
 categories. The app raises `body-double-checkin` only for
 the owner (its `notices_for`), and SayLLM polls notices only for the owner, so the two agree.
 A check-in's card reads "Check-in" / "Still on your current task? 45m in." and, with loose ends
@@ -294,6 +294,40 @@ const home = createHome({
   callTool,
   kernelJson: kernelJsonRequest,
   kernelFetch,
+```
+
+Third, Compare (the panel that sends one prompt to each reasoning choice). It has no persona, so
+it leaves the Body double app out, as every chat but a Body double persona's does (step 8).
+Without this, each leg is offered the app's tools, and a prompt like "starting on the dishes now"
+could be logged once per leg.
+
+**Before**
+
+```js
+import { meetsMinimum, personaSelection } from "./persona-options.js";
+```
+
+**After**
+
+```js
+import { BODY_DOUBLE_APP, meetsMinimum, personaSelection } from "./persona-options.js";
+```
+
+**Before**
+
+```js
+      body: JSON.stringify({ model: alias, messages: [{ role: "user", content: prompt }], max_tokens: 600 }),
+```
+
+**After**
+
+```js
+      // A comparison has no persona, so it leaves the Body double app out,
+      // as every chat but a Body double persona's does.
+      body: JSON.stringify({
+        model: alias, messages: [{ role: "user", content: prompt }], max_tokens: 600,
+        tool_scope: { exclude_apps: [BODY_DOUBLE_APP] },
+      }),
 ```
 
 ## 5. `src/http.js`
@@ -456,10 +490,12 @@ export const TASKS = [
 
 ## 8. `src/chat-lifecycle.js`
 
-Three places:
+Four places:
 - the import;
 - the history budget, which reserves the Body double overhead only in that task's turns;
-- the turn's tool scope, which leaves the app out of every other chat.
+- the turn's tool scope, which leaves the app out of every other chat;
+- the history trim, which uses that same budget. It computed its own before, from the same inputs,
+  and would have left the reserve out of the history actually sent.
 
 The scope uses the kernel's `exclude_apps`, as web search's switch already does. Excluding an app
 the person has no grant for, or that is not registered, changes nothing.
@@ -528,6 +564,25 @@ import {
 
 ```js
     ...(excludedApps.length ? { tool_scope: { exclude_apps: excludedApps } } : {}),
+```
+
+**Before**
+
+```js
+  const trim = trimToBudget(history, {
+    system,
+    limit: effectiveHistoryBudget({
+      ...inferenceBudget,
+      requestedLimit: persona.contextLimit || defaultContextLimit,
+    }),
+  });
+```
+
+**After**
+
+```js
+  // The same budget as the early guard, the Body double reserve included.
+  const trim = trimToBudget(history, { system, limit: historyBudget });
 ```
 
 ## 9. `src/config.js`
@@ -700,10 +755,12 @@ Greenhouse checkout itself was not changed):
 - **The Befores:** every "Before" above occurs exactly once in the real files and was replaced with
   its "After". The `src/http.js` anchor is a fragment of one long line.
 - **SayLLM's own suite:** `node --test "tests/*.test.js"`, as `package.json` runs it, with both new
-  test files added. Unpatched, 411 of 412 pass; patched, 450 of 451. The new tests pass:
+  test files added. Unpatched, 411 of 412 pass; patched, 451 of 452. The new tests pass:
   - the cards' 35;
-  - the chat test's 4: a Body double persona's chat is offered the app and reserves room; other
-    chats leave it out; web search's switch still applies; and the reserve setting is checked.
+  - the chat test's 5: a Body double persona's chat is offered the app and reserves room; other
+    chats leave it out; web search's switch still applies; a long Body double chat is trimmed to
+    the reserved budget, not the plain one; and the reserve setting is checked. The long-chat
+    test fails if step 8's trim edit is left out.
 
   The one failure is the same test both times: it reads `deploy/greenhouse-llmplayground.service`,
   which a copy of `llmplayground/` alone does not have. `express` and `better-sqlite3` were small
