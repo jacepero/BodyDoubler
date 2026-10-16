@@ -197,7 +197,6 @@ fn entry_view(entry: &Entry, zone: &Zone, now: i64) -> Value {
         "at_ts": entry.at,
         "text": entry.text,
         "summary": entry.summary,
-        "mood": entry.mood,
         "task": entry.task,
     })
 }
@@ -316,13 +315,10 @@ pub fn now(store: &Store, ctx: &Ctx, args: &Value) -> Result<Value, ApiError> {
 }
 
 /// An entry as `day` gives it: the time, the summary or else the words (cut),
-/// and the mood and task when there are any.
+/// and the task when there is one.
 fn day_entry(entry: &Entry, zone: &Zone) -> Value {
     let said = entry.summary.as_deref().unwrap_or(&entry.text);
     let mut v = json!({ "time": time::hhmm(zone, entry.at), "text": cut(said, DAY_TEXT) });
-    if let Some(mood) = &entry.mood {
-        v["mood"] = json!(mood);
-    }
     if let Some(task) = &entry.task {
         v["task"] = json!(cut(task, DAY_TITLE));
     }
@@ -472,7 +468,7 @@ pub fn export(store: &Store, ctx: &Ctx, args: &Value) -> Result<Export, ApiError
             "to": to_day.map(time::iso_date),
             "entries": entries.iter().map(|e| json!({
                 "id": e.id, "at": time::iso_utc(e.at), "text": e.text, "summary": e.summary,
-                "mood": e.mood, "task_id": e.task_id, "task": e.task,
+                "task_id": e.task_id, "task": e.task,
             })).collect::<Vec<_>>(),
             "tasks": tasks.iter().map(|t| json!({
                 "id": t.id, "title": t.title, "status": t.status,
@@ -573,9 +569,6 @@ fn markdown(
         if let Some(s) = &e.summary {
             line.push_str(&format!(" — _{}_", md_text(s)));
         }
-        if let Some(m) = &e.mood {
-            line.push_str(&format!(" · mood: {}", md_text(m)));
-        }
         if let Some(t) = &e.task {
             line.push_str(&format!(" ({})", md_text(t)));
         }
@@ -616,19 +609,12 @@ fn markdown(
 // ---- write tools ------------------------------------------------------------------------
 
 pub fn log(store: &mut Store, ctx: &Ctx, args: &Value) -> Result<Outcome, ApiError> {
-    let args = Args::new(args, &["text", "summary", "mood"])?;
+    let args = Args::new(args, &["text", "summary"])?;
     let text = args.required_text("text", 2000)?;
     let summary = args.text("summary", 200)?;
-    let mood = args.text("mood", 40)?;
     // The person's words first: nothing after this can lose them.
     let entry = store
-        .insert_entry(
-            ctx.user,
-            ctx.now,
-            &text,
-            summary.as_deref(),
-            mood.as_deref(),
-        )
+        .insert_entry(ctx.user, ctx.now, &text, summary.as_deref())
         .map_err(store_error)?;
     let answered = touch_logged(store, ctx);
     let plan = ctx.plan(store)?;

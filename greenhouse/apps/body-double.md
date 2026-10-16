@@ -17,7 +17,7 @@ platform's lines:
 
 | Body Double on iOS | Body Double on Greenhouse |
 |---|---|
-| On-device Qwen3 via llama.cpp, one stateless turn per utterance | The one persistent assistant (SayLLM chat). It calls this app's tools; the kernel routes inference. The app holds no model. |
+| On-device Qwen3 via llama.cpp, one stateless turn per utterance | The one persistent assistant, in SayLLM chat with a Body double persona (the persona task "Body double"). Only those chats offer this app's tools; the kernel routes inference. The app holds no model. |
 | App-assembled context block (`[time] [current task] [open threads] [recent]`) | The `now` tool returns the same block as JSON. |
 | `{speech, actions[≤3]}` under a GBNF grammar; unknown tools dropped | Native tool calls through the kernel. Each tool checks its own arguments strictly; an unknown tool is a 404. |
 | Raw entry stored before inference, every time | Only on the page. The narrate box calls `log` directly, with no model in the path, so the words are stored first. In chat, SayLLM keeps the person's message, but a journal entry exists only if the model calls `log`, and its `text` is what the model sends. Nothing is journaled when inference fails. Entries do not record which path wrote them: the iOS `source` column was dropped, because both paths reach the app as the same kind of tool call. |
@@ -30,9 +30,11 @@ platform's lines:
 
 ## How a person uses it
 
-- **In chat.** "ok, switching to the WGU assignment for a bit." The assistant calls `set_task`,
-  then `log`, then answers in a sentence or two: "WGU it is. The IVR refactor is paused at
-  2h 10m." "What was I doing before lunch?" reads `now` or `day`.
+- **In chat, with the Body double persona.** "ok, switching to the WGU assignment for a bit."
+  The assistant calls `set_task`, then `log`, then answers in a sentence or two: "WGU it is. The
+  IVR refactor is paused at 2h 10m." "What was I doing before lunch?" reads `now` or `day`. Other
+  personas' chats do not offer this app's tools, so they pay nothing for them
+  (`llmplayground/INTEGRATION.md`, steps 7 to 12).
 - **On the Body double page in SayLLM** (rail entry and Home widgets, see
   [`llmplayground/`](../llmplayground/)): the current task with a live timer, a box to say what
   they are doing, Done and Switch buttons, today's journal with an Export button, loose ends and
@@ -52,7 +54,7 @@ caller's is "not found".
 |---|---|---|
 | `now` | read | none |
 | `day` | read | `date?` (`YYYY-MM-DD`, default today in the person's zone) |
-| `log` | write | `text` (1–2000 chars, the person's words), `summary?` (≤200), `mood?` (≤40) |
+| `log` | write | `text` (1–2000 chars, the person's words), `summary?` (≤200) |
 | `set_task` | write | `title` (1–200) |
 | `update_task` | write | `task_id` (integer), `status` (`active`, `paused`, `done`, `dropped`) |
 | `open_thread` | write | `note` (1–300) |
@@ -122,7 +124,7 @@ five most recently touched. In `checkins`:
 
 ```json
 {"logged": {"id": 10, "at": "14:32", "at_ts": 1792089120, "text": "ok switching to the WGU assignment",
-            "summary": "Switched to the WGU assignment", "mood": null, "task": "WGU assignment"},
+            "summary": "Switched to the WGU assignment", "task": "WGU assignment"},
  "current_task": {"id": 2, "title": "WGU assignment", "status": "active", "since": "14:32",
                   "since_ts": 1792089120, "minutes": 0, "for": "0m"},
  "answered_checkin": false}
@@ -148,7 +150,7 @@ picked up again. `unchanged` is true when it was already the current task.
   "date": "2026-10-15", "label": "Thu 15 Oct", "timezone": "America/New_York",
   "entries": [{"time": "13:49", "text": "started refactor after standup",
                "task": "Refactor IVR callback handler"},
-              {"time": "14:40", "text": "Switched to the WGU assignment", "mood": "tired",
+              {"time": "14:40", "text": "Switched to the WGU assignment",
                "task": "WGU assignment"}],
   "earlier": 0,
   "tasks": [{"id": 3, "title": "Refactor IVR callback handler", "status": "paused"}],
@@ -168,7 +170,7 @@ picked up again. `unchanged` is true when it was already the current task.
 whole, on an 8,192-token runtime. It follows the iOS recap, which took each entry's
 `summary ?? text.prefix(120)`:
 - each entry is its time, then its one-line summary or, without one, its words, cut to 120
-  characters. `mood` and `task` (cut to 60) appear only when the entry has them;
+  characters. `task` (cut to 60) appears only when the entry has one;
 - `entries` are the day's newest, oldest first, as many as fit 5 KB of JSON (about 1,300
   tokens), at most 60. `earlier` counts the rest;
 - `tasks` are the ten most recently touched that the day touched (logged against, created or
@@ -178,8 +180,8 @@ whole, on an 8,192-token runtime. It follows the iOS recap, which took each entr
 - each `more_*` counts what its list left out, and `truncated` is true when anything was.
 
 Measured: a busy day of 60 short entries with summaries is 3.3 KB, all 60 included. A day at
-every limit (2,000-character entries with 200-character summaries, moods and titles, 40 loose
-ends) is under 8 KB, about 2,000 tokens, with its newest 18 entries.
+every limit (2,000-character entries with 200-character summaries and titles, 40 loose ends) is
+under 8 KB, about 2,000 tokens, with its newest 23 entries.
 
 `checkins`: `{"checkins": {...the same object as in now...}}`.
 
@@ -202,7 +204,7 @@ The answer is the file:
 
 The proxy relays all three. The file is at most 16 MiB; past that the route asks for a shorter
 `from`/`to`. Unknown query names and a bad `format` are a 400.
-- **Markdown:** a heading per day in the span, then a line per entry (time, words, summary, mood,
+- **Markdown:** a heading per day in the span, then a line per entry (time, words, summary,
   task), then all the tasks and loose ends. The person's text is escaped, so line breaks become spaces and
   Markdown and HTML syntax shows as written. A title such as `<img src=x onerror=…>` cannot run
   in a viewer.
@@ -223,10 +225,12 @@ short sentences, no flattery, no lectures"). They are in the manifest verbatim
 (`body-double-app/src/lib.rs`, `manifest()`), so changing one is a contract change the owner
 re-approves.
 
-They are kept short on purpose. The kernel offers every callable tool in every chat turn, with no
-relevance filtering. It sends each one with a `[body-double] ` prefix on the description, under
-the name `body-double__<tool>`. In that form the eight people-facing schemas come to about 2.9 KB
-of JSON, roughly 720 tokens by the chars/4 heuristic, on an 8,192-token runtime. The parameter
+They are kept short on purpose. The kernel offers every callable tool in a chat turn unless the
+turn's tool scope leaves an app out, with no relevance filtering. It sends each one with a
+`[body-double] ` prefix on the description, under the name `body-double__<tool>`. In that form
+the eight people-facing schemas come to 2,761 bytes of JSON, about 690 tokens by the chars/4
+heuristic, on an 8,192-token runtime. SayLLM offers them only in a Body double persona's chats, and
+reserves 720 tokens for them there (`GREENHOUSE_BODY_DOUBLE_OVERHEAD_TOKENS`). The parameter
 schemas carry types, enums and lengths only; the app refuses anything else itself.
 
 ## Check-ins
@@ -274,7 +278,7 @@ retires it. The text is a template, with no model involved and none of the perso
 - without one: body `What are you working on?`;
 - when loose ends are open, a second line: `2 loose ends open.`
 
-No task title, loose-end note or mood is ever in a notice. A notice is proactive output that the
+No task title or loose-end note is ever in a notice. A notice is proactive output that the
 kernel keeps in its own database (tier 1 on the appliance) whatever its sensitivity, so it carries
 none of the person's words. The page and the assistant say what the task is. (SayLLM's proposed
 memory policy, `sayllm-memory-and-sleep-proposal.md` §8, would also keep sensitive topics out of
@@ -298,8 +302,7 @@ open.
 
 ```sql
 CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
-  seq INTEGER NOT NULL, at INTEGER NOT NULL, text TEXT NOT NULL, summary TEXT, mood TEXT,
-  task_id INTEGER);
+  seq INTEGER NOT NULL, at INTEGER NOT NULL, text TEXT NOT NULL, summary TEXT, task_id INTEGER);
 CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
   seq INTEGER NOT NULL, title TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('active','paused','done','dropped')),

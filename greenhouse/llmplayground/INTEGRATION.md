@@ -2,7 +2,8 @@
 
 The Body double app (`apps/body-double.md`) has no UI of its own. A person sees it in SayLLM: a
 **Body double** entry in the rail, four Home widgets, check-in notices for the owner, and a
-persona for chat. This folder holds what SayLLM needs.
+persona for chat: a Body double persona task, the only chats that offer the app's tools. This
+folder holds what SayLLM needs.
 
 Someone who has already saved a rail or a Home layout (the owner, most likely) does not get these
 on their own: turn on Body double under Apps, and add Focus from Customize → Add widgets. "By
@@ -12,10 +13,11 @@ default" means for someone new.
 |---|---|
 | `public/body-double-widgets.js` | New. Copy to `llmplayground/public/`. The four cards and their pure helpers. It imports nothing. |
 | `tests/body-double-widgets.test.js` | New. Copy to `llmplayground/tests/`. 35 `node:test` tests; no DOM needed. |
+| `tests/body-double-chat.test.js` | New. Copy to `llmplayground/tests/`. 4 tests of the Body double task in chat (step 7 to 11). It imports SayLLM's own modules, so it runs only in SayLLM. |
 | `public/body-double.css` | **Do not copy.** A reference copy of the rules that go into `styles.css` (step 6). It is not in `STATIC_ASSETS`, so it would never be served. |
 | `INTEGRATION.md` | This file. |
 
-The edits below change six existing SayLLM files. Each "Before" is quoted from `jacepero/greenhouse`
+The edits below change ten existing SayLLM files and one existing test. Each "Before" is quoted from `jacepero/greenhouse`
 main at `d176a23` (2026-10-14) and occurs there exactly once. If the files have moved since, check
 each "Before" still matches once, then replace it with its "After". "Checked so far" at the end says
 what was run with them applied.
@@ -244,7 +246,7 @@ Two places. First, SayLLM shows the owner's notices as pinned cards, for an allo
 categories. The app raises `body-double-checkin` only for
 the owner (its `notices_for`), and SayLLM polls notices only for the owner, so the two agree.
 A check-in's card reads "Check-in" / "Still on your current task? 45m in." and, with loose ends
-open, "1 loose end open." It carries none of the person's words: no task title, no note, no mood.
+open, "1 loose end open." It carries none of the person's words: no task title, no note.
 The Focus card names the task. Repeated check-ins collapse
 into one card (`alertGroups` keys on category and title). Answering one (a `log`, a task change)
 retires it, and the card goes on the next poll, within a minute.
@@ -386,40 +388,309 @@ when the box is tapped.
 }
 ```
 
-## 7. A "Body double" persona
+## 7. `public/persona-options.js`
 
-In SayLLM, gear → Personas → New persona (`manage.js` `personaForm`). A persona only shapes how the
-one assistant talks; the tools come from the person's grants. The kernel offers this app's tools to
-the model as `body-double__<tool>`, described "[body-double] …", which is why the text names them so.
-Adapted from the iOS app's system prompt (`BodyDouble/Session/Prompt.swift`, `system` and
-`dailySummarySystem`), with its JSON reply format and `log_entry`/`schedule_checkin` names replaced by
-the tools.
+The Body double persona is a persona **task**, "Body double", like "Software engineering" or
+"Writing and editing". Its instruction is the persona text, adapted from the iOS app's system prompt
+(`BodyDouble/Session/Prompt.swift`). Choosing the task is what makes a persona a body double:
+- in that persona's chats, the kernel offers the Body double app's tools, and the turn reserves room
+  for them;
+- every other chat leaves the app out, and pays nothing for it.
+
+The constants sit here because both the browser (the persona form lists `TASKS`) and the server
+(`chat-lifecycle.js`) read this file.
+
+**Before**
+
+```js
+export const TASKS = [
+```
+
+**After**
+
+```js
+// The Body double app (apps/body-double.md). Its tools are offered only in a
+// chat whose persona has the Body double task, and those turns reserve room
+// for the tools' schemas: about 690 tokens in the kernel's wire form,
+// GREENHOUSE_BODY_DOUBLE_OVERHEAD_TOKENS to change. Every other chat leaves
+// the app out (the kernel's tool scope) and pays nothing for it.
+export const BODY_DOUBLE_APP = "body-double";
+export const BODY_DOUBLE_TASK = "body-double";
+export const BODY_DOUBLE_OVERHEAD_TOKENS = 720;
+
+export const TASKS = [
+```
+
+**Before**
+
+```js
+    suggested: { preferredReasoning: "fast", temperature: 1 },
+  },
+];
+```
+
+**After**
+
+```js
+    suggested: { preferredReasoning: "fast", temperature: 1 },
+  },
+  {
+    id: BODY_DOUBLE_TASK,
+    label: "Body double",
+    // Adapted from the iOS Body Double's system prompt.
+    instruction: [
+      "You are the user's body double for interstitial journaling. Through the day they tell you what they are doing. You keep them oriented and keep their record with the body-double tools.",
+      "- When they start or switch to something, first call body-double__set_task with a short title. When they finish or drop it, call body-double__update_task with its id.",
+      "- Every time they say what they are doing or thinking, call body-double__log, with their own words as text and a one-line summary.",
+      "- When they mention something to come back to, call body-double__open_thread. When it is dealt with, call body-double__close_thread with its id.",
+      "- \"Check on me in 25 minutes\" is body-double__checkins with next_in_minutes.",
+      "- If you are not sure what is current, call body-double__now. A question is not an entry: answer it from body-double__now or body-double__day, and do not log it.",
+      "- Use ids exactly as the tools show them. When unsure, record less.",
+      "Reply in at most two short sentences, conversational and grounded. No flattery, no lectures, no emojis. Mention elapsed time or an open loose end only when it is genuinely useful. Ask a brief follow-up now and then, not every turn.",
+      "Asked for a recap of the day, read body-double__day and write four to six plain sentences: what got done, what is still open, any pattern worth noticing. No advice unless something obviously stalled. No lists.",
+    ].join("\n"),
+    suggested: { preferredReasoning: "fast", temperature: 0.6 },
+  },
+];
+```
+
+## 8. `src/chat-lifecycle.js`
+
+Three places:
+- the import;
+- the history budget, which reserves the Body double overhead only in that task's turns;
+- the turn's tool scope, which leaves the app out of every other chat.
+
+The scope uses the kernel's `exclude_apps`, as web search's switch already does. Excluding an app
+the person has no grant for, or that is not registered, changes nothing.
+
+**Before**
+
+```js
+import { composePersonaPrompt, meetsMinimum } from "../public/persona-options.js";
+```
+
+**After**
+
+```js
+import {
+  BODY_DOUBLE_APP, BODY_DOUBLE_OVERHEAD_TOKENS, BODY_DOUBLE_TASK, composePersonaPrompt, meetsMinimum,
+} from "../public/persona-options.js";
+```
+
+**Before**
+
+```js
+  const historyBudget = effectiveHistoryBudget({
+    ...inferenceBudget,
+    requestedLimit: persona.contextLimit || defaultContextLimit,
+  });
+```
+
+**After**
+
+```js
+  // The Body double app's tools are offered only under a persona with its
+  // task, and only those turns reserve room for their schemas.
+  const bodyDouble = persona.task === BODY_DOUBLE_TASK;
+  const historyBudget = effectiveHistoryBudget({
+    ...inferenceBudget,
+    reservedForOverhead: inferenceBudget.reservedForOverhead
+      + (bodyDouble ? inferenceBudget.bodyDoubleOverhead ?? BODY_DOUBLE_OVERHEAD_TOKENS : 0),
+    requestedLimit: persona.contextLimit || defaultContextLimit,
+  });
+```
+
+**Before**
+
+```js
+  const webSearchOff = body?.webSearch === false;
+  const inference = {
+```
+
+**After**
+
+```js
+  const webSearchOff = body?.webSearch === false;
+  // Apps left out of this turn: web search when switched off, and the Body
+  // double app outside a Body double persona's chats.
+  const excludedApps = [...(webSearchOff ? [WEB_SEARCH_APP] : []), ...(bodyDouble ? [] : [BODY_DOUBLE_APP])];
+  const inference = {
+```
+
+**Before**
+
+```js
+    ...(webSearchOff ? { tool_scope: { exclude_apps: [WEB_SEARCH_APP] } } : {}),
+```
+
+**After**
+
+```js
+    ...(excludedApps.length ? { tool_scope: { exclude_apps: excludedApps } } : {}),
+```
+
+## 9. `src/config.js`
+
+The reserve is configurable, `GREENHOUSE_BODY_DOUBLE_OVERHEAD_TOKENS`. The default, 720, is the size
+of the app's eight people-facing tool schemas in the kernel's wire form (2,761 bytes, about 690
+tokens by chars/4), rounded up. Startup refuses a value that would leave a Body double chat under
+512 tokens of history, the same floor the plain budget has.
+
+**Before**
+
+```js
+import { DEFAULT_ESTIMATOR_SAFETY_FACTOR } from "./trim.js";
+```
+
+**After**
+
+```js
+import { DEFAULT_ESTIMATOR_SAFETY_FACTOR } from "./trim.js";
+import { BODY_DOUBLE_OVERHEAD_TOKENS } from "../public/persona-options.js";
+```
+
+**Before**
+
+```js
+  // The estimator's error grows with input size, so the budget is discounted by
+```
+
+**After**
+
+```js
+  // Added to the overhead in a Body double persona's turns, the only turns
+  // that offer the Body double app's tools (persona-options.js).
+  const bodyDoubleOverheadTokens = Number(
+    envString("GREENHOUSE_BODY_DOUBLE_OVERHEAD_TOKENS", String(BODY_DOUBLE_OVERHEAD_TOKENS)),
+  );
+  if (!Number.isInteger(bodyDoubleOverheadTokens) || bodyDoubleOverheadTokens < 0) {
+    throw new Error("GREENHOUSE_BODY_DOUBLE_OVERHEAD_TOKENS must be a non-negative integer");
+  }
+  // The estimator's error grows with input size, so the budget is discounted by
+```
+
+**Before**
+
+```js
+  if (estimatedPromptBudget < 512) {
+    throw new Error(
+      "the configured context and reservations leave under 512 estimated tokens for prompt history",
+    );
+  }
+```
+
+**After**
+
+```js
+  if (estimatedPromptBudget < 512) {
+    throw new Error(
+      "the configured context and reservations leave under 512 estimated tokens for prompt history",
+    );
+  }
+  if (Math.floor((availablePromptSpace - bodyDoubleOverheadTokens) * estimatorSafetyFactor) < 512) {
+    throw new Error(
+      "with the Body double reserve, the configured context leaves under 512 estimated tokens for prompt history",
+    );
+  }
+```
+
+**Before**
+
+```js
+    reservedOverheadTokens,
+    estimatorSafetyFactor,
+```
+
+**After**
+
+```js
+    reservedOverheadTokens,
+    bodyDoubleOverheadTokens,
+    estimatorSafetyFactor,
+```
+
+## 10. `src/server.js`
+
+**Before**
+
+```js
+      reservedForOverhead: config.reservedOverheadTokens,
+```
+
+**After**
+
+```js
+      reservedForOverhead: config.reservedOverheadTokens,
+      bodyDoubleOverhead: config.bodyDoubleOverheadTokens,
+```
+
+## 11. `tests/web-search.test.js`
+
+Web search's test pinned `tool_scope` to nothing when web search is on. With the Body double app
+left out of every chat but a Body double persona's, the scope now names `body-double` there.
+
+**Before**
+
+```js
+test("web search off leaves the web-search app out of the turn; on or unsaid leaves the kernel to choose", async () => {
+  const store = createStore();
+  const off = await prepare(store, { clientRequestId: "request_web_1", message: "news today", webSearch: false });
+  assert.deepEqual(off.inference.tool_scope, { exclude_apps: ["web-search"] });
+  assert.equal(off.context.webSearch, "off");
+  const on = await prepare(store, { clientRequestId: "request_web_2", message: "news today", webSearch: true });
+  assert.equal(on.inference.tool_scope, undefined);
+  const unsaid = await prepare(store, { clientRequestId: "request_web_3", message: "hello" });
+  assert.equal(unsaid.inference.tool_scope, undefined);
+```
+
+**After**
+
+```js
+test("web search off leaves the web-search app out of the turn; on or unsaid leaves the kernel to choose", async () => {
+  const store = createStore();
+  // The Body double app is left out of every chat but a Body double
+  // persona's (tests/body-double-chat.test.js).
+  const off = await prepare(store, { clientRequestId: "request_web_1", message: "news today", webSearch: false });
+  assert.deepEqual(off.inference.tool_scope, { exclude_apps: ["web-search", "body-double"] });
+  assert.equal(off.context.webSearch, "off");
+  const on = await prepare(store, { clientRequestId: "request_web_2", message: "news today", webSearch: true });
+  assert.deepEqual(on.inference.tool_scope, { exclude_apps: ["body-double"] });
+  const unsaid = await prepare(store, { clientRequestId: "request_web_3", message: "hello" });
+  assert.deepEqual(unsaid.inference.tool_scope, { exclude_apps: ["body-double"] });
+```
+
+## 12. The Body double persona
+
+In SayLLM, gear → Personas → New persona (`manage.js` `personaForm`). The task carries the
+instructions, so nothing needs pasting.
 
 | Field | Value |
 |---|---|
 | Name | Body double |
-| Task | General conversation |
-| Personality | Neutral (the instructions below already set the tone) |
-| Default reasoning | fast. Move it up if the fast tier proves unreliable at tool calls. |
-| Memory enabled | the owner's choice. It controls only whether this persona's chats recall memories (`chat-lifecycle.js`). To keep the journal out of memories, also untick the persona's **Universal memories** and **Persona memories** switches on its card under gear → Personas: memory formation checks those (`memory-formation.js`), and Universal is on by default. SayLLM never stores a tool result, but the person's chat messages and the assistant's replies, which repeat what `now` and `day` return, can both form memories. Conversation summaries are written either way; only private turns are never read. Leave the sensitive-topics switch off: moods are emotional states. |
-| Temperature | 0.6 (the iOS app's sampler) |
+| Task | **Body double** (step 7) |
+| Personality | Neutral (the task's instructions already set the tone) |
+| Default reasoning | fast (the task suggests it). Move it up if the fast tier proves unreliable at tool calls. |
+| Temperature | 0.6 (the task suggests it; the iOS app's sampler) |
+| Custom instructions | none |
+| Memory | "Memory enabled" controls only whether this persona's chats recall memories (`chat-lifecycle.js`). To keep the journal out of memories, untick the persona's **Universal memories** and **Persona memories** switches on its card: memory formation checks those (`memory-formation.js`), and Universal is on by default. SayLLM never stores a tool result, but the person's chat messages and the assistant's replies, which repeat what `now` and `day` return, can both form memories. Conversation summaries are written either way; only private turns are never read. |
 
-Custom instructions:
+The task's instruction, as `composePersonaPrompt` puts it first in the system prompt:
 
 ```text
 You are the user's body double for interstitial journaling. Through the day they tell you what they are doing. You keep them oriented and keep their record with the body-double tools.
-
 - When they start or switch to something, first call body-double__set_task with a short title. When they finish or drop it, call body-double__update_task with its id.
-- Every time they say what they are doing, thinking or feeling, call body-double__log, with their own words as text and a one-line summary. Set mood only when they clearly state one.
+- Every time they say what they are doing or thinking, call body-double__log, with their own words as text and a one-line summary.
 - When they mention something to come back to, call body-double__open_thread. When it is dealt with, call body-double__close_thread with its id.
 - "Check on me in 25 minutes" is body-double__checkins with next_in_minutes.
 - If you are not sure what is current, call body-double__now. A question is not an entry: answer it from body-double__now or body-double__day, and do not log it.
 - Use ids exactly as the tools show them. When unsure, record less.
-
 Reply in at most two short sentences, conversational and grounded. No flattery, no lectures, no emojis. Mention elapsed time or an open loose end only when it is genuinely useful. Ask a brief follow-up now and then, not every turn.
-
 Asked for a recap of the day, read body-double__day and write four to six plain sentences: what got done, what is still open, any pattern worth noticing. No advice unless something obviously stalled. No lists.
 ```
+
+The persona can only call the tools the person's grants allow. Someone without a grant on
+`body-double` who picks the task gets the instructions but no tools.
 
 ## Checked so far
 
@@ -428,12 +699,15 @@ Greenhouse checkout itself was not changed):
 
 - **The Befores:** every "Before" above occurs exactly once in the real files and was replaced with
   its "After". The `src/http.js` anchor is a fragment of one long line.
-- **SayLLM's own suite:** `node --test "tests/*.test.js"`, as `package.json` runs it, with this
-  module and its test added. Unpatched, 411 of 412 pass; patched, 446 of 447. The 35 new tests
-  pass. The one failure is the same test both times: it reads
-  `deploy/greenhouse-llmplayground.service`, which a copy of `llmplayground/` alone does not have.
-  `express` and `better-sqlite3` were small local stand-ins, since no packages could be
-  installed.
+- **SayLLM's own suite:** `node --test "tests/*.test.js"`, as `package.json` runs it, with both new
+  test files added. Unpatched, 411 of 412 pass; patched, 450 of 451. The new tests pass:
+  - the cards' 35;
+  - the chat test's 4: a Body double persona's chat is offered the app and reserves room; other
+    chats leave it out; web search's switch still applies; and the reserve setting is checked.
+
+  The one failure is the same test both times: it reads `deploy/greenhouse-llmplayground.service`,
+  which a copy of `llmplayground/` alone does not have. `express` and `better-sqlite3` were small
+  local stand-ins, since no packages could be installed.
 - **Export in Chromium (Playwright):** the page was served from `/apps/llmplayground/` under
   SayLLM's own content security policy. It used the real patched `home.js`, `widgets.js`,
   `apps.js`, `styles.css`, `auth.js` and `ui-state.js` `lockedRequest`, as `app.js` wires them.

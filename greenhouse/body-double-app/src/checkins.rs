@@ -181,8 +181,8 @@ pub fn apply(plan: &mut Plan, step: &Step, now: i64) {
 }
 
 /// A check-in's notice: title and body, from templates. No model is asked,
-/// and none of the person's words are in it: no task title, no loose end, no
-/// mood. A notice is a proactive output kept in the kernel's database, so it
+/// and none of the person's words are in it: no task title, no loose end. A
+/// notice is a proactive output kept in the kernel's database, so it
 /// says only how long the current task has run and how many loose ends are
 /// open; the page and the assistant say what they are.
 pub fn notice_text(task_minutes: Option<i64>, loose_ends: usize) -> (String, String) {

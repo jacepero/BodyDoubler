@@ -23,7 +23,6 @@ CREATE TABLE entries (
   at INTEGER NOT NULL,
   text TEXT NOT NULL,
   summary TEXT,
-  mood TEXT,
   task_id INTEGER
 );
 CREATE INDEX entries_user_at ON entries(user_id, at);
@@ -112,7 +111,6 @@ pub struct Entry {
     pub at: i64,
     pub text: String,
     pub summary: Option<String>,
-    pub mood: Option<String>,
     /// The task's number (the person's own).
     pub task_id: Option<i64>,
     /// The task's title, joined for display.
@@ -191,7 +189,7 @@ pub struct Store {
 /// An entry and its task, which is always the same person's.
 const ENTRY_FROM: &str =
     "entries e LEFT JOIN tasks t ON t.id = e.task_id AND t.user_id = e.user_id";
-const ENTRY_COLUMNS: &str = "e.seq, e.at, e.text, e.summary, e.mood, t.seq, t.title";
+const ENTRY_COLUMNS: &str = "e.seq, e.at, e.text, e.summary, t.seq, t.title";
 const TASK_COLUMNS: &str = "seq, title, status, created_at, updated_at, active_since, id";
 const THREAD_COLUMNS: &str = "seq, note, opened_at, closed_at, id";
 
@@ -206,9 +204,8 @@ fn entry_row(r: &Row) -> rusqlite::Result<Entry> {
         at: r.get(1)?,
         text: r.get(2)?,
         summary: r.get(3)?,
-        mood: r.get(4)?,
-        task_id: r.get(5)?,
-        task: r.get(6)?,
+        task_id: r.get(4)?,
+        task: r.get(5)?,
     })
 }
 
@@ -373,16 +370,15 @@ impl Store {
         at: i64,
         text: &str,
         summary: Option<&str>,
-        mood: Option<&str>,
     ) -> StoreResult<Entry> {
         let task_key = active_in(&self.conn, user)?.map(|t| t.key);
         self.conn.execute(
             &format!(
-                "INSERT INTO entries (user_id, seq, at, text, summary, mood, task_id)
-                 VALUES (?1, {}, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO entries (user_id, seq, at, text, summary, task_id)
+                 VALUES (?1, {}, ?2, ?3, ?4, ?5)",
                 next_seq("entries")
             ),
-            params![user, at, text, summary, mood, task_key],
+            params![user, at, text, summary, task_key],
         )?;
         let key = self.conn.last_insert_rowid();
         Ok(self.conn.query_row(
@@ -885,7 +881,7 @@ mod tests {
             s.close_thread("guest", thread.id, 200),
             Err(StoreError::NotFound(_))
         ));
-        s.insert_entry("owner", 150, "working", None, None).unwrap();
+        s.insert_entry("owner", 150, "working", None).unwrap();
         assert!(s.recent_entries("guest", 5).unwrap().is_empty());
         // The guest's own current task does not collide with the owner's.
         s.set_task("guest", "Theirs", 160).unwrap();
@@ -895,17 +891,11 @@ mod tests {
     #[test]
     fn entries_are_logged_against_the_current_task() {
         let mut s = store();
-        let free = s.insert_entry("owner", 100, "coffee", None, None).unwrap();
+        let free = s.insert_entry("owner", 100, "coffee", None).unwrap();
         assert_eq!(free.task, None);
         let task = s.set_task("owner", "Inbox", 110).unwrap().current;
         let e = s
-            .insert_entry(
-                "owner",
-                120,
-                "replying to Dana",
-                Some("Emails"),
-                Some("tired"),
-            )
+            .insert_entry("owner", 120, "replying to Dana", Some("Emails"))
             .unwrap();
         assert_eq!(e.task_id, Some(task.id));
         assert_eq!(e.task.as_deref(), Some("Inbox"));
@@ -1004,7 +994,7 @@ mod tests {
     fn an_entry_shows_only_its_own_persons_task() {
         let mut s = store();
         s.set_task("owner", "Mine", 100).unwrap();
-        s.insert_entry("owner", 110, "working", None, None).unwrap();
+        s.insert_entry("owner", 110, "working", None).unwrap();
         // Rewire the entry to the guest's task row by hand, as a reused row
         // id after a delete could: the join still shows nothing of theirs.
         s.set_task("guest", "Theirs", 120).unwrap();

@@ -193,7 +193,7 @@ async fn narrating_a_switch_pauses_the_last_task_and_keeps_the_words() {
     let logged = h
         .call(
             "log",
-            json!({"text": "ok switching to the WGU assignment for a bit", "summary": "Switched to WGU", "mood": null}),
+            json!({"text": "ok switching to the WGU assignment for a bit", "summary": "Switched to WGU"}),
         )
         .await;
     assert_eq!(
@@ -286,11 +286,8 @@ async fn the_day_reads_back_in_order_for_a_recap() {
     let h = harness().await;
     h.set_now(at(9, 2));
     h.call("set_task", json!({"title": "Standup notes"})).await;
-    h.call(
-        "log",
-        json!({"text": "writing standup notes", "mood": "tired"}),
-    )
-    .await;
+    h.call("log", json!({"text": "writing standup notes"}))
+        .await;
     h.set_now(at(9, 30));
     h.call("open_thread", json!({"note": "book dentist"})).await;
     h.call("set_task", json!({"title": "Review PR 41"})).await;
@@ -302,7 +299,6 @@ async fn the_day_reads_back_in_order_for_a_recap() {
     let entries = day["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0]["time"], "09:02");
-    assert_eq!(entries[0]["mood"], "tired");
     assert_eq!(entries[0]["task"], "Standup notes");
     assert_eq!(entries[1]["task"], "Review PR 41");
     assert_eq!(day["tasks"].as_array().unwrap().len(), 2);
@@ -448,7 +444,9 @@ async fn invalid_arguments_are_refused_and_nothing_is_stored() {
         ("log", json!({"text": "   "})),
         ("log", json!({"text": "hi", "feeling": "fine"})),
         ("log", json!({"text": "x".repeat(2001)})),
-        ("log", json!({"text": "hi", "mood": 3})),
+        ("log", json!({"text": "hi", "summary": 3})),
+        // Moods are not recorded: the field is gone from the contract.
+        ("log", json!({"text": "hi", "mood": "tired"})),
         ("set_task", json!({"title": ""})),
         ("update_task", json!({"task_id": 1, "status": "finished"})),
         ("update_task", json!({"task_id": "1", "status": "done"})),
@@ -666,11 +664,8 @@ async fn the_journal_downloads_as_markdown_or_json_through_the_proxy() {
     let h = harness().await;
     h.set_now(at(9, 0));
     h.call("set_task", json!({"title": "Inbox"})).await;
-    h.call(
-        "log",
-        json!({"text": "clearing email", "summary": "Email", "mood": "focused"}),
-    )
-    .await;
+    h.call("log", json!({"text": "clearing email", "summary": "Email"}))
+        .await;
     h.call("open_thread", json!({"note": "reply to Sam"})).await;
 
     // As the kernel's proxy relays a browser's GET: purpose data, the
@@ -703,7 +698,7 @@ async fn the_journal_downloads_as_markdown_or_json_through_the_proxy() {
     let content = md.text().await.unwrap();
     assert!(content.starts_with("# Body double journal"));
     assert!(content.contains("## 2026-10-15 (Thu 15 Oct)"));
-    assert!(content.contains("- **09:00** clearing email — _Email_ · mood: focused (Inbox)"));
+    assert!(content.contains("- **09:00** clearing email — _Email_ (Inbox)"));
     assert!(content.contains("- active: Inbox ← current"));
     assert!(content.contains("- open: reply to Sam"));
 
@@ -802,7 +797,7 @@ async fn the_markdown_export_shows_the_persons_text_and_never_runs_it() {
 #[tokio::test]
 async fn the_day_is_sized_for_a_chat_turn() {
     let h = harness().await;
-    // A day at every limit: the longest words, summaries, moods and titles,
+    // A day at every limit: the longest words, summaries and titles,
     // a new task every five entries, and forty loose ends opened.
     for i in 0..70 {
         h.set_now(at(8, 0) + i * 60);
@@ -818,7 +813,6 @@ async fn the_day_is_sized_for_a_chat_turn() {
             json!({
                 "text": format!("entry {i}: {}", "x".repeat(1990)),
                 "summary": format!("summary {i}: {}", "s".repeat(185)),
-                "mood": "m".repeat(40),
             }),
         )
         .await;

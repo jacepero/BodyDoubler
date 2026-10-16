@@ -31,8 +31,11 @@ cd greenhouse
 cargo test                                     # the app and the kernel stand-in
 cargo clippy -p body-double-app --all-targets --no-deps -- -D warnings
 rustfmt --edition 2021 --check body-double-app/src/*.rs body-double-app/tests/*.rs
-node --test llmplayground/tests/*.test.js      # the SayLLM widgets
+node --test llmplayground/tests/body-double-widgets.test.js   # the SayLLM cards
 ```
+
+`llmplayground/tests/body-double-chat.test.js` imports SayLLM's own modules, so it runs only
+inside SayLLM, with the patch applied (`llmplayground/INTEGRATION.md`).
 
 Greenhouse apps use the kernel crate as their SDK (`greenhouse-kernel = { path = "../kernel" }`):
 the identity verifier, the error type, the manifest validator, the cron parser and the clock.
@@ -66,9 +69,10 @@ that workspace (nothing in the Greenhouse repository was changed):
   real files. With the edits applied: `nft -c` accepts the egress file, and systemd-sysusers and
   systemd-tmpfiles create the user and the directory.
 - **SayLLM:** every Before text in `llmplayground/INTEGRATION.md` occurs once in the real files.
-  With the patch applied, SayLLM's own suite gains the module's tests and fails nothing it did not
-  fail before. It ran with stand-ins for `express` and `better-sqlite3`, since no packages could
-  be installed. The Body double page rendered in Chromium from the real `home.js`, `widgets.js`
+  With the patch applied, SayLLM's own suite goes from 411 of 412 passing to 450 of 451. The new
+  tests pass: the cards, and the Body double persona task's reserve and tool scope. The one
+  failure is the same test before and after; it needs `deploy/`, which the copy lacked. The suite
+  ran with stand-ins for `express` and `better-sqlite3`, since no packages could be installed. The Body double page rendered in Chromium from the real `home.js`, `widgets.js`
   and `styles.css`, under SayLLM's own content security policy.
 
 What the comparison found wrong was fixed in this folder. The deploy and SayLLM notes say where.

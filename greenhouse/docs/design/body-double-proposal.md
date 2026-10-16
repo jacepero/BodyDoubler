@@ -1,8 +1,9 @@
 # Greenhouse — Body Double proposal
 
-**Status:** PROPOSAL. Nothing here is decided. The app is built (`body-double-app/`), so the
-decisions below can be made against working code. Nothing is registered, approved, granted or
-deployed.
+**Status:** PROPOSAL. The owner has answered decisions 1, 7 and 11 in chat (2026-10-16; see
+"The owner's answers so far"). None of them is a register entry, and the rest are open. The app is
+built (`body-double-app/`), so the decisions can be made against working code. Nothing is
+registered, approved, granted or deployed.
 **Owns:** the case for a body double in Greenhouse and the decisions it needs. The app's
 behaviour, tools and manifest are in [`apps/body-double.md`](../../apps/body-double.md) (D15).
 
@@ -44,6 +45,10 @@ Greenhouse repository (D14).
   `close_thread` and `checkins`. "Ok, switching to the WGU assignment" becomes `set_task`, then
   `log`, then a one- or two-sentence reply. The tool descriptions carry the iOS prompt's tone, and
   they are part of the approved contract.
+- **Only a Body double persona's chats use them.** SayLLM gets a persona task, "Body double",
+  that carries the iOS prompt. Chats under such a persona are offered the app's tools and reserve
+  room for them. Every other chat leaves the app out, through the kernel's tool scope, and pays
+  nothing for it.
 - **Check-ins are deterministic (D2) and kernel-scheduled (D9).** The `checkins.tick` schedule
   calls `checkin_tick` every five minutes. The app decides who is due from each person's plan
   (interval, quiet hours, zone) and records the check-in. For the owner it also raises a
@@ -94,21 +99,38 @@ These are read from Greenhouse source, main at `d176a23` (2026-10-14).
   So `day` returns a chat-sized day, as the iOS recap did: each entry's summary or its first 120
   characters, the newest that fit 5 KB, with counts of what it left out. A day at every limit stays
   under 8 KB, about 2,000 tokens. The whole journal is a download, not a tool.
-- **Tool schemas cost context in every turn, and SayLLM budgets for less.** The kernel offers
-  every callable tool in every chat turn, with no relevance filtering. Body Double's eight
-  people-facing schemas come to about 2.9 KB in the kernel's wire form (`[body-double] `
-  description prefix, `body-double__` names), about 720 tokens by chars/4, on an 8,192-token
-  runtime. SayLLM reserves overhead for the kernel's policy, serving line and all tool schemas
-  (`GREENHOUSE_RESERVED_OVERHEAD_TOKENS`). That reserve is 512 tokens: SayLLM's default
-  (`llmplayground/src/config.js`) and the deployed context policy (8,192 / 2,048 / 512 / 0.8 in
-  `deploy/DEPLOYMENT-STATUS.md`). The live VM140 value was not read here. The schemas already ran
-  past 512 before this app, and only the 0.8 safety factor absorbed the rest. Adding Body Double
-  could push a long conversation over the runtime's context, and the kernel then answers 400. The
-  descriptions were cut to the minimum.
+- **Tool schemas cost context in every turn that offers them.** The kernel offers every callable
+  tool in a chat turn, unless the turn's tool scope leaves an app out, with no relevance
+  filtering. Body Double's eight people-facing schemas come to 2,761 bytes in the kernel's wire
+  form (`[body-double] ` description prefix, `body-double__` names), about 690 tokens by chars/4,
+  on an 8,192-token runtime.
+  - SayLLM reserves overhead for the kernel's policy, serving line and all tool schemas
+    (`GREENHOUSE_RESERVED_OVERHEAD_TOKENS`). That reserve is 512 tokens: SayLLM's default
+    (`llmplayground/src/config.js`) and the deployed context policy (8,192 / 2,048 / 512 / 0.8 in
+    `deploy/DEPLOYMENT-STATUS.md`). The live VM140 value was not read here.
+  - The schemas already ran past 512 before this app, and only the 0.8 safety factor absorbed the
+    rest. Offered in every chat, Body Double could push a long conversation over the runtime's
+    context, and the kernel then answers 400.
+  - So the descriptions were cut to the minimum, and decision 11 limits where the schemas are
+    offered.
   - The 8,192-token runtime is the fast tier's `gemma4:12b` (`DEPLOYMENT-STATUS`, 2026-09-25); the
     heavy tier is `qwen3:30b`.
   - The tool-conditioning record of 2026-09-09 is about its predecessor, `qwen3:8b`, with ten
     tools offered. How Gemma behaves with more tools offered has not been measured.
+- **Journal content can reach SayLLM's memories.** SayLLM never stores a tool result. But it
+  does store the person's chat messages and the assistant's replies, and both can form memories:
+  - when the assistant reads `now` or `day` and repeats an entry in its reply, that reply can be
+    the basis of an "inferred" memory (`llmplayground/src/memory-formation.js`). Such a memory is
+    universal by default;
+  - the conversation's summary includes the assistant's replies too, and it is written whatever
+    the memory switches say;
+  - narration typed in chat is the person's own message and forms memories like any other.
+
+  The ways to keep the journal out:
+  - the Body double persona's Universal memories and Persona memories switches off ("Memory
+    enabled" governs only recall). This stops memories, not summaries;
+  - private turns, which memory formation never reads. These stop both;
+  - an instruction not to repeat entries word for word. This helps but guarantees nothing.
 - **Greenhouse already has reminders.** `greenhouse.set_reminder` and `set_timer` are offered to
   every person and are delivered in SayLLM with a chime and a card. Body Double's
   `checkins {next_in_minutes}` ("check on me in 25 minutes") overlaps them. With both offered, the
@@ -117,13 +139,24 @@ These are read from Greenhouse source, main at `d176a23` (2026-10-14).
   Assistant's house check, to keep scheduled calls in the audit and Activity view down. A
   per-minute tick would make them exact at 1,440 audited calls a day.
 
+## The owner's answers so far
+
+Given in chat on 2026-10-16, to the questions below. They are recorded here as the owner gave
+them. None is a register entry; recording one there is the owner's to do.
+
+| Decision | The owner's words | What changed |
+|---|---|---|
+| 1. Scope | "Registered app" | The proposal stands as a registered app. |
+| 7. Moods | "Drop it I don't remember what it does" | `log` takes no mood; nothing stores one. |
+| 9. Private turns | "Why would you need to edit the kernel to delete the app data?" (a question) | Decision 9 now recommends a SayLLM-only change. It is still open. |
+| 11. Context budget | "raise it when in use on the app" | SayLLM reserves room for the app's tools only in a Body double persona's chats, the only chats that offer them. |
+
 ## Decisions for the owner
 
-1. **Scope.** Should a body double be part of Greenhouse?
-   - **Recommended:** yes, as the registered app above. If accepted, the owner may record it as
-     a scope entry; agents do not edit the register.
-   - Alternative: a SayLLM persona only. It is quick, but it gives no structured task or loose-end
-     state and no check-ins.
+1. **Scope.** Should a body double be part of Greenhouse? *Answered (2026-10-16): a registered
+   app.* The owner may record it as a scope entry in the register; agents do not edit the
+   register. Bringing the app into the repository is a task the owner writes in
+   `docs/current-work.md`.
 2. **The contract.** The app proposes:
    - eight tools for people (two read, six write);
    - one `command` tool, `checkin_tick`, for the scheduler. The kernel would offer it in chat to
@@ -140,8 +173,8 @@ These are read from Greenhouse source, main at `d176a23` (2026-10-14).
 3. **Grants.** **Recommended:** owner `[read, write]` on `body-double`, and no `command` for
    anyone (the scheduler needs none). Grant other people only when they ask. `read` alone shows
    the cards and allows the download.
-4. **Where the journal lives.** It is personal and longitudinal: what someone did all day, with
-   moods when they state them. **Recommended:**
+4. **Where the journal lives.** It is personal and longitudinal: what someone did all day.
+   **Recommended:**
    - now, the app's state directory on VM140 (`/var/lib/greenhouse/apps/body-double`), backed up
      with the other apps;
    - on the appliance, the passkey-unlocked tier-2 volume as soon as it exists;
@@ -152,7 +185,7 @@ These are read from Greenhouse source, main at `d176a23` (2026-10-14).
      `body-double-checkin` added to SayLLM's shown categories. The app takes one name there and
      refuses a list, so nobody else's check-ins can reach the owner's feed;
    - the text is a template with none of the person's words: "Still on your current task?
-     2h 10m in." and "1 loose end open.", never a task title, a note or a mood. Notices are kept
+     2h 10m in." and "1 loose end open.", never a task title or a note. Notices are kept
      in the kernel's database whatever their sensitivity;
    - other people see due check-ins on their own page and widget, because notices are
      household-wide and owner-only;
@@ -161,46 +194,29 @@ These are read from Greenhouse source, main at `d176a23` (2026-10-14).
    matches the owner's choice for Home's briefing line (a template, no model call), and recaps
    come from the assistant when asked. A later option is an unprompted evening recap through
    D18's background capability, with its budget and audit.
-7. **Moods.** `log` takes a short `mood` label, as the iOS app did. It is recorded for everyone
-   with `write`, with no switch. SayLLM's per-persona sensitive-topics switch (default off) does
-   not cover it. That switch governs what SayLLM remembers, not a journal the person keeps on
-   purpose. It is the owner's answer in `sayllm-memory-and-sleep-proposal.md` §12 to a proposed
-   memory policy, not a register entry. **Recommended:**
-   - store a mood only when the person states one;
-   - never put one in a notice (notices carry none of the person's words), and mention one in a
-     recap only if asked.
-   - Alternative: drop `mood` from `log`. How the person said they felt stays in the entry's own
-     words.
-
-   **How journal content reaches SayLLM's memories.** SayLLM never stores a tool result. But it
-   does store the person's chat messages and the assistant's replies, and both can form memories:
-   - when the assistant reads `now` or `day` and repeats an entry in its reply, that reply can be
-     the basis of an "inferred" memory (`llmplayground/src/memory-formation.js`). Such a memory is
-     universal by default;
-   - the conversation's summary includes the assistant's replies too, and it is written whatever
-     the memory switches say;
-   - narration typed in chat is the person's own message and forms memories like any other.
-
-   SayLLM's word list (`SENSITIVE_WORDS` in `memory-formation.js`) catches a few distress words,
-   such as anxious, depressed, lonely and grieving, whatever the model says. Everyday moods like
-   tired, stressed, sad or frustrated count as sensitive only if the model flags them. So the
-   journal can reach memories. The ways to keep it out:
-   - a Body double persona with its Universal memories and Persona memories switches off ("Memory
-     enabled" governs only recall). This stops memories, not summaries;
-   - private turns, which memory formation never reads. These stop both;
-   - an instruction not to repeat entries word for word. This helps but guarantees nothing.
+7. **Moods.** *Answered (2026-10-16): dropped.* The iOS app let the model attach a short label
+   of how the person felt, such as "tired", to an entry when they said it. `log` no longer takes
+   one: an entry is the person's words and a one-line summary, and nothing else. How they said
+   they felt stays in their own words, if they said it.
 8. **Where it shows.** **Recommended:**
    - the "Body double" rail page;
    - the Focus widget on a new person's Home by default, and the other widgets on the page.
      Someone with a saved layout, the owner included, adds Focus from Add widgets;
    - Check-ins off Home by default.
 9. **Private turns.** The owner's answer, "Allowed, log w/o details", covers the kernel's log,
-   not what an app keeps. **Recommended:** extend it. A small kernel change tells apps a call
-   comes from a private turn, and Body Double then stores nothing from one. It touches a
-   reviewed kernel path.
-   - Alternative: keep the current behaviour and say in the app doc that a private narration is
+   not what an app keeps. A private SayLLM turn still reaches Body Double's tools, and the app
+   cannot tell: the kernel keeps the turn's arguments out of its own log but does not pass the
+   fact to the app. So the app would keep a private narration in the journal. It cannot delete it
+   afterwards either, since it never knew which entries came from private turns.
+
+   No kernel change is needed to prevent it. SayLLM knows a turn is private, since it sends
+   `greenhouse_private` itself. It already leaves an app out of a turn through the kernel's tool
+   scope when web search is switched off.
+   - **Recommended:** SayLLM leaves the Body double app out of private turns too. A private
+     message then never reaches the journal, as it never reaches memory. It is one more condition
+     in the tool scope that decision 11's change already builds.
+   - Alternative: keep the current behaviour, and say in the app doc that a private narration is
      kept.
-   - Alternative: allow writes only from the page, not from chat.
 10. **The journal in the kernel's tool audit.** **Recommended:**
     - accept it for now, since chat text is already in SayLLM's store and private turns keep no
       arguments;
@@ -210,12 +226,17 @@ These are read from Greenhouse source, main at `d176a23` (2026-10-14).
     The download already uses the data plane, for reads only. The kernel proxy's handling of
     browser writes was not verified here, so a write route is a follow-up, not part of this
     build.
-11. **SayLLM's context budget.** **Recommended:** before any grant, read SayLLM's live
-    `GREENHOUSE_RESERVED_OVERHEAD_TOKENS` on VM140 (512 by default and in the recorded policy) and
-    raise it by about 720, the size of Body Double's schemas (512 would become about 1,250). The added schemas then come out of history,
-    not out of the safety margin. Then check a long conversation on the live configuration.
-    - Alternative: a SayLLM change that offers Body Double's tools only with the Body double
-      persona. The kernel already takes a `tool_scope` in a chat request.
+11. **SayLLM's context budget.** *Answered (2026-10-16): raise it when the app is in use.*
+    Built in SayLLM (`llmplayground/INTEGRATION.md`, steps 7 to 12):
+    - a persona task, "Body double", carries the persona's instructions;
+    - only chats under such a persona are offered the app's tools, and those turns reserve
+      `GREENHOUSE_BODY_DOUBLE_OVERHEAD_TOKENS`, 720 by default, on top of the 512;
+    - every other chat leaves the app out (`exclude_apps`), so it keeps its whole history budget
+      and pays nothing for Body Double.
+
+    SayLLM's own suite passes with it, plus four new tests. Before any grant, read the live
+    `GREENHOUSE_RESERVED_OVERHEAD_TOKENS` on VM140 (512 by default and in the recorded policy).
+    Then check a long Body double conversation on the live configuration.
 12. **"Check on me in 25 minutes."** `checkins {next_in_minutes}` and the kernel's
     `greenhouse.set_reminder` both fit that request.
     - Body Double's one-off is a check-in. Any activity answers it, it shows as due on the Focus
@@ -241,8 +262,8 @@ These are read from Greenhouse source, main at `d176a23` (2026-10-14).
    - Done once already, read-only, against main at `d176a23`: 36 unit and 21 integration tests
      pass and clippy is clean with the real kernel crate (`README.md`). Run them again on the
      commit that brings the crate in.
-3. **SayLLM.** Apply `llmplayground/INTEGRATION.md` and run SayLLM's tests. Raise the reserved
-   overhead (decision 11), then deploy `public/` with the owner's OK.
+3. **SayLLM.** Apply `llmplayground/INTEGRATION.md` and run SayLLM's tests. It includes decision
+   11's per-chat reserve and tool scope. Then deploy SayLLM with the owner's OK.
 4. **VM140.**
    - Build, then run `deploy/body-double/install-body-double.sh`.
    - The owner approves the contract and sets grants as `greenhouse-op-owner`

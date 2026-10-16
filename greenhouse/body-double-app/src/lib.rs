@@ -8,7 +8,7 @@
 // On iOS one small on-device model did everything. Here the assistant is the
 // voice and the kernel routes its inference; this app holds the state the
 // iOS app kept in SQLite, and no model. Check-ins are templates: no model
-// call, and moods are never part of them.
+// call, and none of the person's words are in them.
 
 pub mod checkins;
 pub mod config;
@@ -92,11 +92,11 @@ pub fn manifest() -> Value {
                 "Body double: the person's current task and how long it has run, open loose ends, recent journal entries and check-ins. Read it when they say what they are doing; reply in one or two short sentences, without flattery or lectures.",
                 no_arguments()),
             tool("day",
-                "Body double journal for one day (date YYYY-MM-DD, default today), for recaps. Mention moods only if asked.",
+                "Body double journal for one day (date YYYY-MM-DD, default today), for recaps.",
                 object(json!({"date": date}), &[])),
             tool("log",
-                "Body double: record what the person says they are doing or feeling, in their own words (text), with a one-line summary. Mood only if clearly stated.",
-                object(json!({"text": text(2000), "summary": text(200), "mood": text(40)}), &["text"])),
+                "Body double: record what the person says they are doing, in their own words (text), with a one-line summary.",
+                object(json!({"text": text(2000), "summary": text(200)}), &["text"])),
             tool("set_task",
                 "Body double: the person started or switched to a task; call before log. The previous one is paused.",
                 object(json!({"title": text(200)}), &["title"])),
