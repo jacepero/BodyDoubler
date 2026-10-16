@@ -5,7 +5,7 @@ Everything under `greenhouse/` mirrors the layout of `jacepero/greenhouse`, so e
 across to the same path.
 
 - **In Greenhouse:** brought into `jacepero/greenhouse` on branch `feature/body-double`, from main
-  at `a69f96d` (commits `d34e5eb`, the app; `f6012bd`, SayLLM), 2026-10-16. That branch is now the
+  at `a69f96d` (commits `d34e5eb`, the app; `f6012bd`, SayLLM; `a62caaa`, docs), 2026-10-16. That branch is now the
   copy that counts; this folder is the staging record it came from.
 - **What it is and why:** [`docs/design/body-double-proposal.md`](docs/design/body-double-proposal.md).
   The owner answered every decision in chat on 2026-10-16; the scope entry is the owner's to record
@@ -21,7 +21,7 @@ across to the same path.
 | `apps/body-double.md` | yes | The app doc (D15) |
 | `docs/design/body-double-proposal.md` | yes | The proposal with its decisions for the owner |
 | `deploy/greenhouse-body-double.service`, `deploy/body-double/`, `deploy/body-double.md` | yes | The VM140 unit, egress set, example configuration, installer and runbook |
-| `deploy/greenhouse.sysusers.d/body-double.conf` | its one line goes into `deploy/greenhouse.sysusers` | The app's principal |
+| `deploy/greenhouse.sysusers.d/body-double.conf` | its one line is merged into `deploy/greenhouse.sysusers` (done on `feature/body-double`) | The app's principal |
 | `appliance/` | new files yes; `appliance/INTEGRATION.md` lists edits to existing ones | The Fedora bootc image additions |
 | `llmplayground/public/body-double-widgets.js`, `llmplayground/tests/body-double-widgets.test.js` | yes | SayLLM's rail page and Home widgets |
 | `llmplayground/tests/body-double-chat.test.js` | yes | The Body double persona task in chat. It runs only inside SayLLM, with the patch applied |

@@ -84,13 +84,17 @@ Greenhouse repository (D14).
 
 ## Findings that bear on the decisions
 
-These are read from Greenhouse source, main at `d176a23` (2026-10-14).
+These are read from Greenhouse source, main at `d176a23` (2026-10-14). The tool-audit finding was
+re-checked at `a69f96d`, where tier 2 changed it.
 
-- **Every tool call is in the kernel's audit with its arguments.** Dispatch writes each call,
-  allowed or refused, to `tool_audit` with the arguments' JSON. A `log` call therefore puts the
-  person's words into `kernel.db` as well as the journal. On the appliance that is tier 1, not the
-  passkey tier. Chat messages are already stored by SayLLM; the widget's narrate box adds the
-  kernel copy. Private turns are the exception: the kernel keeps no arguments for them.
+- **On a machine without tier 2, every tool call is in the kernel's audit with its arguments.**
+  Dispatch writes each call, allowed or refused, to `tool_audit` with the arguments' JSON. So on
+  VM140 a `log` call puts the person's words into `kernel.db` as well as the journal. Chat messages
+  are already stored by SayLLM; the widget's narrate box adds the kernel copy. Private turns are
+  the exception: the kernel keeps no arguments for them.
+- **On a machine with tier 2 (the appliance), the audit keeps no arguments at all.** It writes
+  `{"tier2":true}` for every turn (`kernel/src/dispatch.rs` `audit_detail`, `kernel/src/vault.rs`
+  `tier1_keeps_no_chat_text`, since `ee037e5`).
 - **A private SayLLM turn still reaches the app, and the app is not told.** The owner answered
   "Allowed, log w/o details" for tools in private turns (chat, 2026-10-10). The kernel honours
   that, since its log keeps no arguments, but Body Double would still keep the words. That is not
@@ -233,17 +237,20 @@ owner gave them. None is a register entry; recording the scope entry there is th
 
     The download already uses the data plane, for reads only. The kernel proxy's handling of
     browser writes was not verified here, so a write route is a follow-up, not part of this
-    build.
+    build. The copy this decision accepts exists only on a machine without tier 2, which today
+    is VM140; on the appliance the tool audit keeps no arguments.
 11. **SayLLM's context budget.** *Answered (2026-10-16): raise it when the app is in use.*
-    Built in SayLLM (`llmplayground/INTEGRATION.md`, steps 7 to 12):
+    Built in SayLLM: `BODY_DOUBLE_TASK` and the reserve's default in
+    `llmplayground/public/persona-options.js`, the budget and the tool scope in
+    `llmplayground/src/chat-lifecycle.js`, and the setting in `llmplayground/src/config.js`:
     - a persona task, "Body double", carries the persona's instructions;
     - only chats under such a persona are offered the app's tools, and those turns reserve
       `GREENHOUSE_BODY_DOUBLE_OVERHEAD_TOKENS`, 720 by default, on top of the 512;
     - every other chat leaves the app out (`exclude_apps`), so it keeps its whole history budget
       and pays nothing for Body Double.
 
-    SayLLM's own suite passes with it, plus five new tests, including one showing a long Body
-    double chat is trimmed to the reserved budget. Comparisons, which have no persona, leave the
+    SayLLM's own suite passes with it. The new tests are six for the chat side and 35 for the
+    cards, 41 in all. One shows a long Body double chat is trimmed to the reserved budget. Comparisons, which have no persona, leave the
     app out too. Before any grant, read the live
     `GREENHOUSE_RESERVED_OVERHEAD_TOKENS` on VM140 (512 by default and in the recorded policy).
     Then check a long Body double conversation on the live configuration.

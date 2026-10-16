@@ -218,8 +218,8 @@ The proxy relays all three. The file is at most 16 MiB; past that the route asks
 every task and loose end, whatever the span, as the iOS export did. A one-day file therefore still
 lists every task title and loose-end note the person has.
 
-It is not a tool. A tool's result goes into the model's context whole, and the kernel's tool
-audit keeps its arguments. A download does neither, and changes nothing.
+It is not a tool. A tool's result goes into the model's context whole, and on a machine without
+tier 2 the kernel's tool audit keeps its arguments. A download does neither, and changes nothing.
 
 ### Tool descriptions (part of the contract)
 
@@ -328,8 +328,8 @@ app; `AUTOINCREMENT` keeps them from being reused after a delete. An entry's `ta
 row id, and it is only ever joined to the same person's tasks. `plans.timezone` is empty for a
 person who never chose a zone.
 
-The journal is personal and longitudinal. The proposal recommends the passkey-unlocked tier-2
-volume once the appliance has one (decision 4, the owner's to answer).
+The journal is personal and longitudinal. On the appliance it goes on the passkey-unlocked tier-2
+volume (proposal, decision 4); "Not yet" says what that still needs.
 
 ## Manifest
 
@@ -412,5 +412,6 @@ are optional. Environment: `GREENHOUSE_KERNEL_URL` (default `http://127.0.0.1:40
   - its lines in `greenhouse-apps.conf` (sysusers and tmpfiles);
   - its egress set.
 
-  The exact Before/After texts, checked against main at `d176a23`, are in `jacepero/BodyDoubler`,
-  `greenhouse/appliance/INTEGRATION.md`.
+  Draft Before/After texts for these edits are outside this repository, in `jacepero/BodyDoubler`,
+  `greenhouse/appliance/INTEGRATION.md`. They were checked against main at `d176a23`, not against
+  the current appliance files, so check them again before use.

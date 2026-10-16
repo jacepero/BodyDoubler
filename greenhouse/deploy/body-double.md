@@ -1,7 +1,8 @@
 # Body double app on VM140
 
-Behaviour: [`apps/body-double.md`](../apps/body-double.md). The decisions it needs from the owner,
-none of them made yet: [`docs/design/body-double-proposal.md`](../docs/design/body-double-proposal.md).
+Behaviour: [`apps/body-double.md`](../apps/body-double.md). The decisions it needed, answered by the
+owner in chat on 2026-10-16 (not yet in the register):
+[`docs/design/body-double-proposal.md`](../docs/design/body-double-proposal.md).
 
 **Status:** not deployed. Nothing is registered, approved or granted.
 
@@ -17,15 +18,9 @@ schedule, and its proxy relays a person's journal download (`/apps/body-double/e
 
 ## Before the first install
 
-`deploy/greenhouse.sysusers` needs the app's user, after the weather app's line:
-
-```text
-u greenhouse-body-double - "Greenhouse body double app" /var/lib/greenhouse/apps/body-double
-```
-
-The line travels with this delivery as `deploy/greenhouse.sysusers.d/body-double.conf`, because
-the shared file cannot be copied whole. Merge the line; do not copy that file into the repo. The
-installer stops with a message if the user is still missing after `systemd-sysusers`.
+The app's user, `greenhouse-body-double`, is in `deploy/greenhouse.sysusers`, after the weather
+app's line. The installer runs `systemd-sysusers` on that file and stops with a message if the
+user is still missing.
 
 ## Install
 
@@ -157,8 +152,8 @@ that would put entries in someone's journal or raise a real check-in.
 
 The journal is personal and longitudinal. On VM140 it is in the app's state directory, covered by
 the weekly VM backup with the other apps. Before an update that changes its schema, copy it with
-SQLite's backup API, as for the kernel database. For the appliance, the proposal recommends the
-passkey-unlocked tier-2 volume once that exists (decision 4, the owner's to answer).
+SQLite's backup API, as for the kernel database. On the appliance it goes on the tier-2 volume
+(proposal, decision 4); see Appliance below.
 
 ## Rollback
 
