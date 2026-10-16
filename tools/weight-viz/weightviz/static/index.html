@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Greenhouse Weight Diff</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='4' height='4' rx='1' fill='%23cde2fb'/%3E%3Crect x='6' y='1' width='4' height='4' rx='1' fill='%235598e7'/%3E%3Crect x='11' y='1' width='4' height='4' rx='1' fill='%231c5cab'/%3E%3Crect x='1' y='6' width='4' height='4' rx='1' fill='%235598e7'/%3E%3Crect x='6' y='6' width='4' height='4' rx='1' fill='%23104281'/%3E%3Crect x='11' y='6' width='4' height='4' rx='1' fill='%2386b6ef'/%3E%3Crect x='1' y='11' width='4' height='4' rx='1' fill='%231c5cab'/%3E%3Crect x='6' y='11' width='4' height='4' rx='1' fill='%2386b6ef'/%3E%3Crect x='11' y='11' width='4' height='4' rx='1' fill='%23cde2fb'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="leaf">❦</span> Greenhouse <span>· weight diff</span></div>
+  <label class="inline">Run <select id="run" aria-label="Training run"></select></label>
+  <button class="btn" id="rescan" title="Look for new checkpoints">Rescan</button>
+  <div class="spacer"></div>
+  <div class="jobstatus" id="jobstatus" aria-live="polite"></div>
+  <button class="btn" id="theme" title="Toggle light/dark theme">☾ Dark</button>
+</header>
+
+<main>
+  <div id="welcome" hidden></div>
+  <div id="views">
+  <div class="filters" role="group" aria-label="Filters">
+    <label class="inline">Metric
+      <select id="metric">
+        <option value="rel">Relative change ‖ΔW‖ / ‖W‖</option>
+        <option value="rms">RMS update per weight</option>
+        <option value="norm">Update norm ‖ΔW‖</option>
+        <option value="cosdist">Direction change (1 − cos)</option>
+        <option value="changed">Weights changed (%)</option>
+      </select>
+    </label>
+    <label class="inline">Modules
+      <select id="group">
+        <option value="all">All</option>
+        <option value="attn">Attention</option>
+        <option value="mlp">MLP</option>
+        <option value="norm">Norms</option>
+        <option value="embed">Embeddings &amp; head</option>
+      </select>
+    </label>
+    <span class="inline sub">Color scale</span>
+    <div class="seg" id="scale" role="group" aria-label="Color scale">
+      <button data-v="log" aria-pressed="true">Log</button>
+      <button data-v="linear" aria-pressed="false">Linear</button>
+    </div>
+  </div>
+
+  <section id="timeline">
+    <header>
+      <h2>Training timeline</h2>
+      <div class="seg" id="mode" role="group" aria-label="Comparison mode">
+        <button data-v="consecutive" aria-pressed="true">Day over day</button>
+        <button data-v="baseline" aria-pressed="false">Since first day</button>
+      </div>
+      <span class="sub" id="tl-sub"></span>
+    </header>
+    <div class="tiles" id="tl-tiles"></div>
+    <div class="grid3">
+      <div class="stack">
+        <div class="card">
+          <div class="card-head"><h3 id="tl-line-title">Whole-model change</h3></div>
+          <div class="chart" id="tl-line"></div>
+        </div>
+        <div class="card" id="tl-meta-card" hidden>
+          <div class="card-head"><h3>Logged metric</h3><select id="meta-field" aria-label="Logged metric"></select></div>
+          <div class="chart" id="tl-meta"></div>
+          <div class="card-note">From each day's <span class="mono">meta.json</span>.</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3 id="tl-heat-title">Change by layer and day</h3><span class="grow"></span>
+          <button class="btn" id="tl-table-toggle" aria-pressed="false">Table</button>
+        </div>
+        <div id="tl-heat"></div>
+        <div class="card-note">Click a cell to open that day's diff.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="day">
+    <header>
+      <h2>Day diff</h2>
+      <button class="btn icon" id="day-prev" title="Previous day pair" aria-label="Previous day pair">◀</button>
+      <select id="day-a" aria-label="From day"></select>
+      <span class="sub">→</span>
+      <select id="day-b" aria-label="To day"></select>
+      <button class="btn icon" id="day-next" title="Next day pair" aria-label="Next day pair">▶</button>
+      <span class="sub" id="day-sub"></span>
+    </header>
+    <div id="day-alerts"></div>
+    <div class="tiles" id="day-tiles"></div>
+    <div class="stack">
+      <div class="card">
+        <div class="card-head">
+          <h3 id="day-heat-title">Layer × module</h3><span class="grow"></span>
+          <button class="btn" id="day-table-toggle" aria-pressed="false">Table</button>
+        </div>
+        <div id="day-heat"></div>
+        <div class="card-note">Click a cell to inspect that tensor.</div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Tensors</h3><span class="grow"></span>
+          <input type="search" id="tensor-search" placeholder="Filter by name…" aria-label="Filter tensors by name">
+        </div>
+        <div class="table-wrap"><table id="tensor-table"></table></div>
+        <div class="card-note" id="tensor-table-note"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tensor" hidden>
+    <header>
+      <h2>Tensor</h2>
+      <span class="mono" id="tensor-name"></span>
+      <span class="sub" id="tensor-sub"></span>
+      <span class="spacer"></span>
+      <button class="btn" id="tensor-close">Close</button>
+    </header>
+    <div class="tiles" id="tensor-tiles"></div>
+    <div class="grid3">
+      <div class="card">
+        <div class="card-head">
+          <h3 id="tmap-title">Update map</h3><span class="grow"></span>
+          <div class="seg" id="tmap-mode" role="group" aria-label="Map shows">
+            <button data-v="rms" aria-pressed="true">|ΔW|</button>
+            <button data-v="signed" aria-pressed="false">ΔW signed</button>
+            <button data-v="weight" aria-pressed="false">W (to day)</button>
+          </div>
+        </div>
+        <div id="tmap"></div>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <div class="card-head">
+            <h3>Distribution of ΔW</h3><span class="grow"></span>
+            <div class="seg" id="hist-scale" role="group" aria-label="Histogram y scale">
+              <button data-v="linear" aria-pressed="true">Linear</button>
+              <button data-v="log" aria-pressed="false">Log</button>
+            </div>
+          </div>
+          <div class="chart" id="hist"></div>
+          <div class="card-note" id="hist-note"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Update spectrum</h3></div>
+          <div class="chart" id="spectrum"></div>
+          <div class="card-note" id="spectrum-note"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+  </div>
+</main>
+
+<div id="tooltip" role="tooltip"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

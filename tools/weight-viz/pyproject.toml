@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weightviz"
+version = "0.1.0"
+description = "Day-over-day LLM weight diff visualizer for Greenhouse"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.22"]
+
+[project.scripts]
+weightviz = "weightviz.__main__:main"
+
+[tool.setuptools]
+packages = ["weightviz"]
+
+[tool.setuptools.package-data]
+weightviz = ["static/*"]

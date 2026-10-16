@@ -111,3 +111,8 @@ the official Qwen GGUF repos on Hugging Face — verify they still resolve.
 - Weights download post-install from Hugging Face (~1.1–2.5 GB); surfaced to
   the user with progress, resume, and checksum verification.
 - Mic/speech permission strings are set in `project.yml` → Info.plist.
+
+## Other tools in this repo
+
+- [`tools/weight-viz`](tools/weight-viz/README.md): a local web app for
+  visualizing day-over-day LLM weight diffs from Greenhouse training checkpoints.
