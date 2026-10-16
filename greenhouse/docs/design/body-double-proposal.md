@@ -1,9 +1,10 @@
 # Greenhouse — Body Double proposal
 
-**Status:** PROPOSAL. The owner has answered decisions 1, 7 and 11 in chat (2026-10-16; see
-"The owner's answers so far"). None of them is a register entry, and the rest are open. The app is
-built (`body-double-app/`), so the decisions can be made against working code. Nothing is
-registered, approved, granted or deployed.
+**Status:** ANSWERED. The owner answered every decision in chat on 2026-10-16 ("The owner's
+answers"). They are not in the register yet: the scope entry is the owner's to record. The app is
+in the repository (`body-double-app/`).
+Approving its contract, granting it and deploying it are the owner's acts at deployment
+(`deploy/body-double.md`); none has happened.
 **Owns:** the case for a body double in Greenhouse and the decisions it needs. The app's
 behaviour, tools and manifest are in [`apps/body-double.md`](../../apps/body-double.md) (D15).
 
@@ -139,24 +140,26 @@ These are read from Greenhouse source, main at `d176a23` (2026-10-14).
   Assistant's house check, to keep scheduled calls in the audit and Activity view down. A
   per-minute tick would make them exact at 1,440 audited calls a day.
 
-## The owner's answers so far
+## The owner's answers
 
-Given in chat on 2026-10-16, to the questions below. They are recorded here as the owner gave
-them. None is a register entry; recording one there is the owner's to do.
+Given in chat on 2026-10-16, to the decisions below, in two messages. They are recorded here as the
+owner gave them. None is a register entry; recording the scope entry there is the owner's to do.
 
-| Decision | The owner's words | What changed |
+| Decision | The owner's words | What it means |
 |---|---|---|
-| 1. Scope | "Registered app" | The proposal stands as a registered app. |
+| 1. Scope | "Registered app" | Body double is a registered app. |
 | 7. Moods | "Drop it I don't remember what it does" | `log` takes no mood; nothing stores one. |
-| 9. Private turns | "Why would you need to edit the kernel to delete the app data?" (a question) | Decision 9 now recommends a SayLLM-only change. It is still open. |
-| 11. Context budget | "raise it when in use on the app" | SayLLM reserves room for the app's tools only in a Body double persona's chats, the only chats that offer them. |
+| 9. Private turns | First a question: "Why would you need to edit the kernel to delete the app data?" Then, with the rest: "the rest is approved" | No kernel change. SayLLM leaves the app out of private turns. Built. |
+| 11. Context budget | "raise it when in use on the app" | SayLLM reserves room for the app's tools only in a Body double persona's chats, the only chats that offer them. Built. |
+| 2–6, 8, 10, 12 | "And the rest is approved" | The recommendations as written stand. |
+| Into the repository | "Yes bring it in" | Brought in on `feature/body-double`, from `a69f96d`. |
 
 ## Decisions for the owner
 
 1. **Scope.** Should a body double be part of Greenhouse? *Answered (2026-10-16): a registered
-   app.* The owner may record it as a scope entry in the register; agents do not edit the
-   register. Bringing the app into the repository is a task the owner writes in
-   `docs/current-work.md`.
+   app.* Neither the register nor `docs/current-work.md` records it yet; both are the owner's to
+   write. The owner asked for it to be brought in ("Yes bring it in"), and it is on
+   `feature/body-double`.
 2. **The contract.** The app proposes:
    - eight tools for people (two read, six write);
    - one `command` tool, `checkin_tick`, for the scheduler. The kernel would offer it in chat to
@@ -169,18 +172,22 @@ them. None is a register entry; recording one there is the owner's to do.
    The journal download is an app route, not part of the manifest: the kernel's proxy reaches any
    registered app, and the app requires a data-plane identity with `read`.
 
-   **Recommended:** approve as proposed.
-3. **Grants.** **Recommended:** owner `[read, write]` on `body-double`, and no `command` for
+   **Recommended:** approve as proposed. *The owner's answer (chat, 2026-10-16): approved.* The kernel approval itself is
+   the owner's act at deployment.
+3. **Grants.** *The owner's answer (chat, 2026-10-16): approved; set at deployment.* **Recommended:** owner `[read, write]` on `body-double`, and no `command` for
    anyone (the scheduler needs none). Grant other people only when they ask. `read` alone shows
    the cards and allows the download.
 4. **Where the journal lives.** It is personal and longitudinal: what someone did all day.
    **Recommended:**
    - now, the app's state directory on VM140 (`/var/lib/greenhouse/apps/body-double`), backed up
      with the other apps;
-   - on the appliance, the passkey-unlocked tier-2 volume as soon as it exists;
+   - on the appliance, the passkey-unlocked tier-2 volume as soon as it exists. *The owner's
+     answer (chat, 2026-10-16): approved.* Tier 2 now exists (`appliance/README.md`), but holds only SayLLM's data. So
+     the vault helper must bind the app's state folder too, and the app needs a locked mode.
+     Until then the appliance does not run the app (`apps/body-double.md`, "Not yet");
    - keep entries until deleted. Deleting entries is not built yet; it would be the first
      follow-up.
-5. **Check-in notices.** **Recommended:**
+5. **Check-in notices.** *The owner's answer (chat, 2026-10-16): approved.* **Recommended:**
    - notices for the owner only (configuration `"notices_for": "owner"`), with
      `body-double-checkin` added to SayLLM's shown categories. The app takes one name there and
      refuses a list, so nobody else's check-ins can reach the owner's feed;
@@ -190,7 +197,7 @@ them. None is a register entry; recording one there is the owner's to do.
    - other people see due check-ins on their own page and widget, because notices are
      household-wide and owner-only;
    - no push. None exists today, and the owner chose "no push" for the memory report.
-6. **Model use outside a turn.** **Recommended:** none for now. Check-ins are templates, which
+6. **Model use outside a turn.** *The owner's answer (chat, 2026-10-16): approved.* **Recommended:** none for now. Check-ins are templates, which
    matches the owner's choice for Home's briefing line (a template, no model call), and recaps
    come from the assistant when asked. A later option is an unprompted evening recap through
    D18's background capability, with its budget and audit.
@@ -198,12 +205,13 @@ them. None is a register entry; recording one there is the owner's to do.
    of how the person felt, such as "tired", to an entry when they said it. `log` no longer takes
    one: an entry is the person's words and a one-line summary, and nothing else. How they said
    they felt stays in their own words, if they said it.
-8. **Where it shows.** **Recommended:**
+8. **Where it shows.** *The owner's answer (chat, 2026-10-16): approved.* **Recommended:**
    - the "Body double" rail page;
    - the Focus widget on a new person's Home by default, and the other widgets on the page.
      Someone with a saved layout, the owner included, adds Focus from Add widgets;
    - Check-ins off Home by default.
-9. **Private turns.** The owner's answer, "Allowed, log w/o details", covers the kernel's log,
+9. **Private turns.** *The owner's answer (chat, 2026-10-16): approved: the recommendation below; built.* The owner's
+   answer, "Allowed, log w/o details", covers the kernel's log,
    not what an app keeps. A private SayLLM turn still reaches Body Double's tools, and the app
    cannot tell: the kernel keeps the turn's arguments out of its own log but does not pass the
    fact to the app. So the app would keep a private narration in the journal. It cannot delete it
@@ -217,7 +225,7 @@ them. None is a register entry; recording one there is the owner's to do.
      in the tool scope that decision 11's change already builds.
    - Alternative: keep the current behaviour, and say in the app doc that a private narration is
      kept.
-10. **The journal in the kernel's tool audit.** **Recommended:**
+10. **The journal in the kernel's tool audit.** *The owner's answer (chat, 2026-10-16): approved.* **Recommended:**
     - accept it for now, since chat text is already in SayLLM's store and private turns keep no
       arguments;
     - later, give the narrate box a data-plane route through the kernel proxy too, which keeps no
@@ -239,7 +247,7 @@ them. None is a register entry; recording one there is the owner's to do.
     app out too. Before any grant, read the live
     `GREENHOUSE_RESERVED_OVERHEAD_TOKENS` on VM140 (512 by default and in the recorded policy).
     Then check a long Body double conversation on the live configuration.
-12. **"Check on me in 25 minutes."** `checkins {next_in_minutes}` and the kernel's
+12. **"Check on me in 25 minutes."** *The owner's answer (chat, 2026-10-16): approved: the one-off stays.* `checkins {next_in_minutes}` and the kernel's
     `greenhouse.set_reminder` both fit that request.
     - Body Double's one-off is a check-in. Any activity answers it, it shows as due on the Focus
       card, and it counts toward the eight unanswered. Only the owner gets a notice for it.
@@ -250,30 +258,32 @@ them. None is a register entry; recording one there is the owner's to do.
     - Alternative: drop `next_in_minutes`, which saves a little schema, and let the assistant set
       a reminder.
 
-## Delivery, after the answers
+## Delivery
 
-1. **Copy into the repository.** `body-double-app/` joins the workspace members, and
-   `Cargo.lock` gains its entry: no new crate, only `rusqlite`, `axum`, `tokio`, `serde`,
-   `serde_json` and `reqwest`, all already locked. The appliance Containerfile's
-   `COPY body-double-app` line lands in the same commit; without it the image build cannot load
-   the workspace. The other files are `apps/body-double.md`,
-   this proposal, and the `deploy/` files.
-2. **Check against the real kernel crate.**
-   - Run `cargo test -p body-double-app` and
-     `cargo clippy -p body-double-app --all-targets --no-deps -- -D warnings`.
-   - Done once already, read-only, against main at `d176a23`: 36 unit and 21 integration tests
-     pass and clippy is clean with the real kernel crate (`README.md`). Run them again on the
-     commit that brings the crate in.
-3. **SayLLM.** Apply `llmplayground/INTEGRATION.md` and run SayLLM's tests. It includes decision
-   11's per-chat reserve and tool scope. Then deploy SayLLM with the owner's OK.
+1. **Into the repository.** *Done* on `feature/body-double`, from main at `a69f96d`.
+   - `body-double-app/` joins the workspace members.
+   - `Cargo.lock` gains only its own entry, with no new crate.
+   - The appliance Containerfile copies the crate, so the image build can load the workspace.
+   - Also added: `apps/body-double.md`, this proposal, the `deploy/` files, and the SayLLM side
+     (the cards, the persona task, the per-chat reserve and tool scope, and the private-turn rule).
+2. **Checks on that branch.** *Done.*
+   - With the real kernel crate: `cargo test --locked -p body-double-app` gives 36 unit and 21
+     integration tests passing.
+   - `cargo clippy --locked -p body-double-app --all-targets --no-deps -- -D warnings` is clean,
+     and `rustfmt --edition 2021 --check` passes.
+   - `cargo build --release --locked -p body-double-app` builds.
+   - SayLLM's suite, `node --test "tests/*.test.js"` after `npm ci`: 457 of 457 on the branch,
+     against 416 of 416 on main.
+   - Hosted CI was not run (`[skip ci]`).
+3. **SayLLM.** Deploy it, front end and server, and restart, with the owner's OK.
 4. **VM140.**
    - Build, then run `deploy/body-double/install-body-double.sh`.
    - The owner approves the contract and sets grants as `greenhouse-op-owner`
      (`deploy/body-double.md`).
    - Check read-only. Never create real check-ins on production to test.
    - Record the deployment in `deploy/DEPLOYMENT-STATUS.md`.
-5. **Appliance.** Apply `appliance/INTEGRATION.md` and prove it in the lab VM with the layer
-   check.
+5. **Appliance.** After tier 2 can hold the journal (decision 4), the image edits listed in
+   `apps/body-double.md`, "Not yet", proven in the lab VM with the layer check.
 
 ## Out of scope for this proposal
 

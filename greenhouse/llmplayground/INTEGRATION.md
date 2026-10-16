@@ -13,7 +13,7 @@ default" means for someone new.
 |---|---|
 | `public/body-double-widgets.js` | New. Copy to `llmplayground/public/`. The four cards and their pure helpers. It imports nothing. |
 | `tests/body-double-widgets.test.js` | New. Copy to `llmplayground/tests/`. 35 `node:test` tests; no DOM needed. |
-| `tests/body-double-chat.test.js` | New. Copy to `llmplayground/tests/`. 5 tests of the Body double task in chat (steps 7 to 11). It imports SayLLM's own modules, so it runs only in SayLLM. |
+| `tests/body-double-chat.test.js` | New. Copy to `llmplayground/tests/`. 6 tests of the Body double task in chat (steps 7 to 11). It imports SayLLM's own modules, so it runs only in SayLLM. |
 | `public/body-double.css` | **Do not copy.** A reference copy of the rules that go into `styles.css` (step 6). It is not in `STATIC_ASSETS`, so it would never be served. |
 | `INTEGRATION.md` | This file. |
 
@@ -493,7 +493,8 @@ export const TASKS = [
 Four places:
 - the import;
 - the history budget, which reserves the Body double overhead only in that task's turns;
-- the turn's tool scope, which leaves the app out of every other chat;
+- the turn's tool scope, which leaves the app out of every other chat, and out of any private turn
+  even in a Body double chat (proposal decision 9);
 - the history trim, which uses that same budget. It computed its own before, from the same inputs,
   and would have left the reserve out of the history actually sent.
 
@@ -549,8 +550,12 @@ import {
 ```js
   const webSearchOff = body?.webSearch === false;
   // Apps left out of this turn: web search when switched off, and the Body
-  // double app outside a Body double persona's chats.
-  const excludedApps = [...(webSearchOff ? [WEB_SEARCH_APP] : []), ...(bodyDouble ? [] : [BODY_DOUBLE_APP])];
+  // double app outside a Body double persona's chats and in any private turn,
+  // so a private message never reaches the journal (proposal decision 9).
+  const excludedApps = [
+    ...(webSearchOff ? [WEB_SEARCH_APP] : []),
+    ...(bodyDouble && !isPrivate ? [] : [BODY_DOUBLE_APP]),
+  ];
   const inference = {
 ```
 
@@ -749,22 +754,23 @@ The persona can only call the tools the person's grants allow. Someone without a
 
 ## Checked so far
 
-Against `jacepero/greenhouse` main at `d176a23`, in a scratch copy of its `llmplayground/` (the
-Greenhouse checkout itself was not changed):
+Applied in `jacepero/greenhouse` on `feature/body-double` (from main at `a69f96d`, 2026-10-16):
 
-- **The Befores:** every "Before" above occurs exactly once in the real files and was replaced with
-  its "After". The `src/http.js` anchor is a fragment of one long line.
-- **SayLLM's own suite:** `node --test "tests/*.test.js"`, as `package.json` runs it, with both new
-  test files added. Unpatched, 411 of 412 pass; patched, 451 of 452. The new tests pass:
-  - the cards' 35;
-  - the chat test's 5: a Body double persona's chat is offered the app and reserves room; other
-    chats leave it out; web search's switch still applies; a long Body double chat is trimmed to
-    the reserved budget, not the plain one; and the reserve setting is checked. The long-chat
-    test fails if step 8's trim edit is left out.
+- **The Befores:** every "Before" above occurs exactly once in the files on that main and was
+  replaced with its "After". The `src/http.js` anchor is a fragment of one long line.
+- **SayLLM's own suite:** `npm ci`, then `node --test "tests/*.test.js"` as `package.json` runs it,
+  with `deploy/` beside it. Main passes 416 of 416. The branch passes 457 of 457: the cards' 35 and
+  the chat test's 6, which cover:
+  - a Body double persona's chat is offered the app and reserves room;
+  - other chats leave it out;
+  - a private turn leaves it out;
+  - web search's switch still applies;
+  - a long Body double chat is trimmed to the reserved budget (this test fails without step 8's
+    trim edit);
+  - the reserve setting is checked.
 
-  The one failure is the same test both times: it reads `deploy/greenhouse-llmplayground.service`,
-  which a copy of `llmplayground/` alone does not have. `express` and `better-sqlite3` were small
-  local stand-ins, since no packages could be installed.
+Earlier, against main at `d176a23`:
+
 - **Export in Chromium (Playwright):** the page was served from `/apps/llmplayground/` under
   SayLLM's own content security policy. It used the real patched `home.js`, `widgets.js`,
   `apps.js`, `styles.css`, `auth.js` and `ui-state.js` `lockedRequest`, as `app.js` wires them.

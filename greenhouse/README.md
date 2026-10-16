@@ -4,8 +4,12 @@ The iOS Body Double (the rest of this repository), distilled into a registered G
 Everything under `greenhouse/` mirrors the layout of `jacepero/greenhouse`, so each file copies
 across to the same path.
 
+- **In Greenhouse:** brought into `jacepero/greenhouse` on branch `feature/body-double`, from main
+  at `a69f96d` (commits `d34e5eb`, the app; `f6012bd`, SayLLM), 2026-10-16. That branch is now the
+  copy that counts; this folder is the staging record it came from.
 - **What it is and why:** [`docs/design/body-double-proposal.md`](docs/design/body-double-proposal.md).
-  It is a proposal; nothing in it is decided until the owner answers its decisions.
+  The owner answered every decision in chat on 2026-10-16; the scope entry is the owner's to record
+  in the register.
 - **What it does:** [`apps/body-double.md`](apps/body-double.md). This covers the tools, results,
   check-ins, storage, manifest and configuration.
 

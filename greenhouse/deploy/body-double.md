@@ -80,7 +80,12 @@ granted `command`, so grant it to nobody. Grant other people `read` and `write` 
 ask.
 
 For check-in notices to show in SayLLM, `body-double-checkin` must be on its shown categories
-(`llmplayground/INTEGRATION.md`).
+(`SHOWN_NOTIFICATION_CATEGORIES` in `llmplayground/public/app.js`, part of this change).
+
+SayLLM's side changes its server as well as `public/`: the persona task, the per-chat reserve and
+the tool scope are in `src/`. Deploy both and restart SayLLM. A `public/`-only deploy would offer the
+Body double task while every chat still got the app's tools at full cost.
+`GREENHOUSE_BODY_DOUBLE_OVERHEAD_TOKENS` (default 720) needs no setting.
 
 ## Verify
 
@@ -184,5 +189,6 @@ The journal stays in `/var/lib/greenhouse/apps/body-double/`. Delete it only on 
 
 ## Appliance
 
-The image builds the binary and enables the unit, which is skipped until the app's credential is
-on the machine. The edits are in [`appliance/INTEGRATION.md`](../appliance/INTEGRATION.md).
+Not yet. The image copies the crate, so the workspace builds, but it does not build or run the
+app. The journal belongs on tier 2 (proposal, decision 4), which first needs the vault helper and a
+locked mode ([`apps/body-double.md`](../apps/body-double.md), "Not yet").

@@ -1,8 +1,9 @@
 # Greenhouse — App: Body Double
 
-**Status:** Built (`body-double-app/`). Not deployed. Deployment is in
-[`deploy/body-double.md`](../deploy/body-double.md); the decisions it needs are in
-[`docs/design/body-double-proposal.md`](../docs/design/body-double-proposal.md).
+**Status:** Built (`body-double-app/`) and in the repository. Not deployed: VM140's steps are in
+[`deploy/body-double.md`](../deploy/body-double.md); the appliance waits on tier 2 ("Not yet").
+The owner answered every decision in
+[`docs/design/body-double-proposal.md`](../docs/design/body-double-proposal.md) on 2026-10-16.
 **Owns:** the body double's behaviour, tools, storage and manifest.
 
 ## What it is
@@ -33,8 +34,10 @@ platform's lines:
 - **In chat, with the Body double persona.** "ok, switching to the WGU assignment for a bit."
   The assistant calls `set_task`, then `log`, then answers in a sentence or two: "WGU it is. The
   IVR refactor is paused at 2h 10m." "What was I doing before lunch?" reads `now` or `day`. Other
-  personas' chats do not offer this app's tools, so they pay nothing for them
-  (`llmplayground/INTEGRATION.md`, steps 7 to 12).
+  personas' chats do not offer this app's tools, so they pay nothing for them. Nor does a private
+  turn, even in a Body double chat, so nothing said in private reaches the journal. SayLLM sets
+  both through the kernel's tool scope: `BODY_DOUBLE_TASK` in `llmplayground/public/persona-options.js`,
+  and the scope in `llmplayground/src/chat-lifecycle.js`.
 - **On the Body double page in SayLLM** (rail entry and Home widgets, see
   [`llmplayground/`](../llmplayground/)): the current task with a live timer, a box to say what
   they are doing, Done and Switch buttons, today's journal with an Export button, loose ends and
@@ -396,3 +399,18 @@ are optional. Environment: `GREENHOUSE_KERNEL_URL` (default `http://127.0.0.1:40
 - **A reply box on the notice itself.** Today the person answers on the page or in chat.
 - **Opening the page as presence**, as opening the iOS app was. Today only a write counts.
 - **Editing and deleting entries.**
+- **The appliance.** The image copies the crate, so the workspace builds, but it does not build or
+  run the app yet. Decision 4 puts the journal on the passkey-unlocked tier-2 volume, which now
+  exists (`appliance/README.md`). Tier 2 holds only SayLLM's data so far, so the app needs:
+  - the vault helper (`appliance/rootfs/usr/libexec/greenhouse/vault`) to bind its state folder to
+    the volume, as it does SayLLM's;
+  - a locked mode for the app while the volume is closed, with no journal and no check-ins.
+
+  After that come the image edits:
+  - `-p body-double-app` in the Containerfile's build, with its binary in the install list;
+  - the unit, its `05-appliance-restored.conf` drop-in and its enable line;
+  - its lines in `greenhouse-apps.conf` (sysusers and tmpfiles);
+  - its egress set.
+
+  The exact Before/After texts, checked against main at `d176a23`, are in `jacepero/BodyDoubler`,
+  `greenhouse/appliance/INTEGRATION.md`.

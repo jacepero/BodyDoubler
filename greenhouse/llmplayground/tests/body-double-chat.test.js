@@ -115,6 +115,20 @@ test("a long Body double chat is trimmed to the reserved budget, not the plain o
   assert.ok(results.plain.estimatedTokens > reserved, "the plain chat keeps more, so the trim really differs");
 });
 
+test("a private turn leaves the Body double app out, even in a Body double chat", async () => {
+  const store = createStore();
+  const personaId = bodyDoublePersona(store);
+  const open = await prepare(store, { clientRequestId: "request_bd_private_1", message: "starting the dishes", personaId });
+  assert.equal(open.inference.tool_scope, undefined);
+  const hidden = await prepare(store, {
+    clientRequestId: "request_bd_private_2", message: "something private", personaId,
+    conversationId: open.conversationId, private: true,
+  });
+  assert.equal(hidden.inference.greenhouse_private, true);
+  assert.deepEqual(hidden.inference.tool_scope, { exclude_apps: [BODY_DOUBLE_APP] });
+  store.close();
+});
+
 test("the Body double task carries the persona's instructions and no mood", () => {
   const task = TASKS.find((item) => item.id === BODY_DOUBLE_TASK);
   assert.equal(task.label, "Body double");
